@@ -135,6 +135,22 @@ def turbine_facts(
     return facts
 
 
+def add_derived_facts(truth: dict) -> dict:
+    """Facts that combine sources, used by the multi-tool eval questions.
+
+    priority_must_include: assets any sensible "what to prioritise" answer
+    must name: high-risk assets that are *still* failing repeatedly, plus
+    turbines the RUL model flags critical. (A high score from one past
+    event, like the C-205 overhaul, is a judgement call, so not required.)
+    """
+    critical = sorted(a for a, t in truth["turbines"].items() if t["status"] == "critical")
+    top_risk = {a["asset_id"] for a in truth["top_risk_assets"]}
+    repeating = {r["asset_id"] for r in truth["repeat_failures_last_quarter"]}
+    truth["critical_turbines"] = critical
+    truth["priority_must_include"] = sorted(top_risk & repeating) + critical
+    return truth
+
+
 def write_ground_truth(truth: dict, out_path: Path) -> None:
     """Save ground truth as pretty-printed JSON."""
     out_path.parent.mkdir(parents=True, exist_ok=True)

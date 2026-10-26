@@ -1,6 +1,7 @@
 """Command-line entry point (`mc`).
 
 mc setup   build local data: work orders, C-MAPSS download, RUL model, ground truth
+mc eval    run the evaluation suite (`--agent null` for the do-nothing baseline)
 mc ask     ask the agent a question from the terminal (coming soon)
 """
 
@@ -13,6 +14,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     """Build every local artefact the agent and evals need. Safe to re-run."""
     from maintenance_copilot.data import cmapss
     from maintenance_copilot.data.ground_truth import (
+        add_derived_facts,
         compute_ground_truth,
         turbine_facts,
         write_ground_truth,
@@ -41,6 +43,7 @@ def cmd_setup(args: argparse.Namespace) -> int:
     truth = compute_ground_truth(config.WORK_ORDERS_DB)
     truth["turbines"] = turbine_facts(model, test, true_rul, truth["turbine_cmapss_map"])
     truth["rul_model_test_metrics"] = model.test_metrics
+    add_derived_facts(truth)
     write_ground_truth(truth, config.GROUND_TRUTH_FILE)
     print(f"    -> {config.GROUND_TRUTH_FILE}")
 
@@ -48,8 +51,37 @@ def cmd_setup(args: argparse.Namespace) -> int:
     print(f"  problem site: {truth['problem_site']['name']}")
     pumps = ", ".join(truth["pumps_with_repeat_failures_last_quarter"])
     print(f"  pumps with repeat failures last quarter: {pumps}")
-    critical = [a for a, t in truth["turbines"].items() if t["status"] == "critical"]
-    print(f"  turbines flagged critical by RUL model: {', '.join(critical)}")
+    print(f"  turbines flagged critical by RUL model: {', '.join(truth['critical_turbines'])}")
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    """Run the eval suite and write results to evals/results/."""
+    import json
+
+    from maintenance_copilot import evaluation
+
+    if not config.GROUND_TRUTH_FILE.exists():
+        print("No ground truth found. Run `mc setup` first.")
+        return 1
+    truth = json.loads(config.GROUND_TRUTH_FILE.read_text())
+    cases = evaluation.load_cases()
+    if args.case:
+        cases = [c for c in cases if c["id"] in args.case]
+    if args.agent == "null":
+        agent = evaluation.null_agent
+    else:
+        from maintenance_copilot.agent import build_agent
+
+        agent = build_agent()
+
+    print(f"Running {len(cases)} cases x {args.trials} trials with the {args.agent} agent...")
+    suite = evaluation.run_suite(agent, cases, truth, trials=args.trials, workers=args.workers)
+    md, log = evaluation.save(
+        suite, config.REPO_ROOT / "evals" / "results", config.REPO_ROOT / "evals" / "runs"
+    )
+    print(md.read_text())
+    print(f"Summary: {md}\nFull run log: {log}")
     return 0
 
 
@@ -62,6 +94,13 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="build local data, RUL model and ground truth")
     setup.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     setup.set_defaults(func=cmd_setup)
+
+    ev = sub.add_parser("eval", help="run the evaluation suite")
+    ev.add_argument("--agent", choices=["copilot", "null"], default="copilot")
+    ev.add_argument("--trials", type=int, default=3, help="runs per case (default: 3)")
+    ev.add_argument("--workers", type=int, default=4, help="parallel runs (default: 4)")
+    ev.add_argument("--case", action="append", help="only run this case id (repeatable)")
+    ev.set_defaults(func=cmd_eval)
     return parser
 
 
