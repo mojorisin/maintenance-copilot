@@ -12,6 +12,7 @@ visible and controllable.
 import json
 import operator
 import time
+from collections.abc import Callable
 from typing import Annotated, TypedDict
 
 from langchain_core.messages import AIMessage, AnyMessage, HumanMessage, SystemMessage, ToolMessage
@@ -142,17 +143,42 @@ def _final_answer(last: AIMessage) -> str:
 
 
 def build_agent(llm=None):
-    """Return `ask(question) -> AgentRun`, the interface the CLI, UI and evals use."""
+    """Return `ask(question, history) -> AgentRun`, used by the CLI, UI and evals.
+
+    `history` is earlier (question, answer) pairs, so the chat UI can handle
+    follow-ups like "what about P-109?". Only the text of earlier turns is
+    sent, not their tool results: that keeps context small, and the agent
+    re-queries when it needs data again. Evals always ask with no history.
+
+    `on_tool_start(name, args)` is called as each tool call is decided, so
+    a UI can show progress live instead of a bare spinner.
+    """
     graph, name = build_graph(llm)
 
-    def ask(question: str) -> AgentRun:
+    def ask(
+        question: str,
+        history: list[tuple[str, str]] | None = None,
+        on_tool_start: Callable[[str, dict], None] | None = None,
+    ) -> AgentRun:
         start = time.monotonic()
         run = AgentRun(question=question, model=name)
+        messages: list[AnyMessage] = []
+        for q, a in history or []:
+            messages += [HumanMessage(q), AIMessage(a)]
+        messages.append(HumanMessage(question))
         try:
-            state = graph.invoke(
-                {"messages": [HumanMessage(question)], "tool_log": [], "rounds": 0},
+            state = None
+            # stream_mode="values" yields the full state after every step;
+            # the last one is the final state.
+            for state in graph.stream(
+                {"messages": messages, "tool_log": [], "rounds": 0},
                 {"recursion_limit": 2 * MAX_TOOL_ROUNDS + 3},
-            )
+                stream_mode="values",
+            ):
+                last = state["messages"][-1]
+                if on_tool_start and isinstance(last, AIMessage) and last.tool_calls:
+                    for call in last.tool_calls:
+                        on_tool_start(call["name"], call["args"])
         except Exception as exc:
             run.error = f"{type(exc).__name__}: {exc}"
             run.latency_s = time.monotonic() - start

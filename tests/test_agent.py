@@ -55,6 +55,37 @@ def test_runs_tools_then_answers(data_env):
     assert run.model == "scripted"
 
 
+def test_progress_callback_sees_each_tool_call(data_env):
+    model = ScriptedModel(
+        responses=[
+            _tool_call("get_sensor_trend", {"asset_id": "GT-042"}),
+            _tool_call("search_manuals", {"query": "borescope"}, 1),
+            AIMessage(content="Done."),
+        ]
+    )
+    started = []
+    run = build_agent(model)("Engine 42?", on_tool_start=lambda n, a: started.append((n, a)))
+    assert started == [
+        ("get_sensor_trend", {"asset_id": "GT-042"}),
+        ("search_manuals", {"query": "borescope"}),
+    ]
+    assert run.answer == "Done."
+
+
+def test_history_is_sent_for_follow_up_questions(data_env):
+    seen = []
+
+    class Recording(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            seen.append([m.content for m in messages])
+            return super()._generate(messages, stop, run_manager, **kwargs)
+
+    model = Recording(responses=[AIMessage(content="P-109 had 3 bearing failures [WO-1].")])
+    build_agent(model)("What about P-109?", history=[("Worst pump?", "P-104 [WO-2].")])
+    # system prompt, then the earlier turn, then the follow-up
+    assert seen[0][1:] == ["Worst pump?", "P-104 [WO-2].", "What about P-109?"]
+
+
 def test_tool_errors_are_returned_to_the_model(data_env):
     model = ScriptedModel(
         responses=[
