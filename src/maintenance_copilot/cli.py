@@ -1,6 +1,6 @@
 """Command-line entry point (`mc`).
 
-mc setup   build the work-order database and eval ground truth
+mc setup   build local data: work orders, C-MAPSS download, RUL model, ground truth
 mc ask     ask the agent a question from the terminal (coming soon)
 """
 
@@ -10,19 +10,46 @@ from maintenance_copilot import __version__, config
 
 
 def cmd_setup(args: argparse.Namespace) -> int:
-    """Generate the synthetic work-order database and its ground truth."""
-    from maintenance_copilot.data.ground_truth import write_ground_truth
-    from maintenance_copilot.data.work_orders import generate
-
-    n = generate(config.WORK_ORDERS_DB, seed=args.seed)
-    truth = write_ground_truth(config.WORK_ORDERS_DB, config.GROUND_TRUTH_FILE)
-    print(f"Work orders: {n} rows -> {config.WORK_ORDERS_DB}")
-    print(f"Ground truth: {config.GROUND_TRUTH_FILE}")
-    print(f"  problem site: {truth['problem_site']['name']}")
-    print(
-        f"  pumps with repeat failures last quarter: "
-        f"{', '.join(truth['pumps_with_repeat_failures_last_quarter'])}"
+    """Build every local artefact the agent and evals need. Safe to re-run."""
+    from maintenance_copilot.data import cmapss
+    from maintenance_copilot.data.ground_truth import (
+        compute_ground_truth,
+        turbine_facts,
+        write_ground_truth,
     )
+    from maintenance_copilot.data.work_orders import generate
+    from maintenance_copilot.rul import RULModel, evaluate_on_test
+
+    print("1/4 Generating synthetic work orders...")
+    n = generate(config.WORK_ORDERS_DB, seed=args.seed)
+    print(f"    {n} work orders -> {config.WORK_ORDERS_DB}")
+
+    print("2/4 Fetching NASA C-MAPSS FD001 (about 12 MB, first run only)...")
+    cmapss.fetch_fd001(config.CMAPSS_DIR)
+    train = cmapss.load_fd001("train", config.CMAPSS_DIR)
+    test = cmapss.load_fd001("test", config.CMAPSS_DIR)
+    true_rul = cmapss.load_test_rul(config.CMAPSS_DIR)
+
+    print("3/4 Training the RUL baseline...")
+    model = RULModel.fit(train)
+    model.test_metrics = evaluate_on_test(model, test, true_rul)
+    model.save(config.RUL_MODEL_FILE)
+    m = model.test_metrics
+    print(f"    test RMSE {m['rmse']} cycles, MAE {m['mae']} on {m['engines']} NASA test engines")
+
+    print("4/4 Computing eval ground truth...")
+    truth = compute_ground_truth(config.WORK_ORDERS_DB)
+    truth["turbines"] = turbine_facts(model, test, true_rul, truth["turbine_cmapss_map"])
+    truth["rul_model_test_metrics"] = model.test_metrics
+    write_ground_truth(truth, config.GROUND_TRUTH_FILE)
+    print(f"    -> {config.GROUND_TRUTH_FILE}")
+
+    print("\nHeadlines the agent should be able to find:")
+    print(f"  problem site: {truth['problem_site']['name']}")
+    pumps = ", ".join(truth["pumps_with_repeat_failures_last_quarter"])
+    print(f"  pumps with repeat failures last quarter: {pumps}")
+    critical = [a for a, t in truth["turbines"].items() if t["status"] == "critical"]
+    print(f"  turbines flagged critical by RUL model: {', '.join(critical)}")
     return 0
 
 
@@ -32,7 +59,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     sub = parser.add_subparsers(dest="command")
 
-    setup = sub.add_parser("setup", help="build local data (work orders, ground truth)")
+    setup = sub.add_parser("setup", help="build local data, RUL model and ground truth")
     setup.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     setup.set_defaults(func=cmd_setup)
     return parser

@@ -1,7 +1,8 @@
-"""Compute eval ground truth directly from the generated database.
+"""Compute eval ground truth directly from the generated data.
 
 Expected answers are *queried*, never hand-typed, so they can't drift from
-the data. Each fact is computed with plain SQL that a reviewer can check.
+the data. Each fact is computed with plain SQL (or the RUL model) that a
+reviewer can check.
 """
 
 import json
@@ -9,7 +10,10 @@ import sqlite3
 from datetime import date, timedelta
 from pathlib import Path
 
+import pandas as pd
+
 from maintenance_copilot.config import AS_OF_DATE
+from maintenance_copilot.rul import RULModel, assess_engine
 
 
 def last_quarter(as_of: date = AS_OF_DATE) -> tuple[date, date]:
@@ -109,9 +113,29 @@ def compute_ground_truth(db_path: Path) -> dict:
     }
 
 
-def write_ground_truth(db_path: Path, out_path: Path) -> dict:
-    """Compute ground truth and save it as pretty-printed JSON."""
-    truth = compute_ground_truth(db_path)
+def turbine_facts(
+    model: RULModel, test: pd.DataFrame, true_rul: pd.Series, turbine_map: dict[str, int]
+) -> dict:
+    """Per-turbine RUL facts: what the tool will report, and what is actually true.
+
+    Evals check the agent against the *estimate* (what its tool returns);
+    the true RUL is kept alongside to document where the model is wrong.
+    """
+    facts = {}
+    for asset_id, unit in turbine_map.items():
+        a = assess_engine(test[test["unit"] == unit], model)
+        facts[asset_id] = {
+            "cmapss_unit": unit,
+            "rul_estimate_cycles": a["rul_estimate_cycles"],
+            "rul_range_cycles": a["rul_range_cycles"],
+            "status": a["status"],
+            "top_drifting_sensors": [s["sensor"] for s in a["top_drifting_sensors"]],
+            "true_rul_cycles": int(true_rul[unit]),
+        }
+    return facts
+
+
+def write_ground_truth(truth: dict, out_path: Path) -> None:
+    """Save ground truth as pretty-printed JSON."""
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text(json.dumps(truth, indent=2) + "\n")
-    return truth
