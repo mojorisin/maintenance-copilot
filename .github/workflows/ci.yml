@@ -12,9 +12,19 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0 # scan the full history, not just the latest commit
-      - uses: gitleaks/gitleaks-action@v2
+      # Runs the gitleaks CLI directly rather than gitleaks-action, which
+      # fails on a repo's first push (it scans from the root commit's parent).
+      - name: Install gitleaks (checksum-verified)
         env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          VERSION: 8.24.3
+        run: |
+          base=https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}
+          curl -sSLO "${base}/gitleaks_${VERSION}_linux_x64.tar.gz"
+          curl -sSLO "${base}/gitleaks_${VERSION}_checksums.txt"
+          sha256sum --check --ignore-missing "gitleaks_${VERSION}_checksums.txt"
+          tar -xzf "gitleaks_${VERSION}_linux_x64.tar.gz" gitleaks
+      - name: Scan full git history for secrets
+        run: ./gitleaks git --redact --verbose .
 
   test:
     runs-on: ubuntu-latest
