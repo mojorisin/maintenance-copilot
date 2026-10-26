@@ -10,8 +10,9 @@ maintenance history, sensor data and equipment manuals, and citing a source for 
 **[▶ Live demo](https://maintenance-copilot.streamlit.app)** · [Eval results](#evaluation) ·
 [Design decisions](#design-decisions-and-trade-offs) · [Production notes](#what-id-change-for-production)
 
-<!-- Demo GIF: record with the steps in docs/RECORDING.md, save as docs/demo.gif, then
-     replace this comment with:  ![Maintenance Copilot demo](docs/demo.gif)  -->
+![Maintenance Copilot answering "Which pumps had repeat failures in the last quarter?" with live tool progress, a cited answer table and the "How I got this" trace](docs/demo.gif)
+
+<sub>The 15-second wait while the agent works is sped up 5× in this recording.</sub>
 
 > A personal learning project built on public and synthetic data. The work orders and manuals
 > are synthetic; the sensor data is NASA's public C-MAPSS turbofan dataset.
