@@ -2,7 +2,7 @@
 
 mc setup   build local data: work orders, C-MAPSS download, RUL model, ground truth
 mc eval    run the evaluation suite (`--agent null` for the do-nothing baseline)
-mc ask     ask the agent a question from the terminal (coming soon)
+mc ask     ask the agent a question from the terminal
 """
 
 import argparse
@@ -85,6 +85,33 @@ def cmd_eval(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_ask(args: argparse.Namespace) -> int:
+    """Ask the agent one question and print the answer and its tool trace."""
+    import json
+
+    from maintenance_copilot.agent import build_agent
+    from maintenance_copilot.evaluation import run_cost
+
+    run = build_agent()(args.question)
+    if run.error:
+        print(f"Error: {run.error}")
+        return 1
+    print(run.answer)
+    print("\n--- how I got this ---")
+    for i, call in enumerate(run.tool_calls, 1):
+        print(f"{i}. {call.name}({json.dumps(call.args)})")
+        if "error" in call.result:
+            print(f"   error: {call.result['error']}")
+        else:
+            print(f"   sources: {', '.join(call.result.get('sources', [])[:6])}")
+    cost = run_cost(run)
+    print(
+        f"\n{run.model} · {run.latency_s:.1f}s · {run.input_tokens:,} in / "
+        f"{run.output_tokens:,} out tokens" + (f" · ${cost:.4f}" if cost is not None else "")
+    )
+    return 0
+
+
 def build_parser() -> argparse.ArgumentParser:
     """Create the top-level argument parser."""
     parser = argparse.ArgumentParser(prog="mc", description="Maintenance Copilot CLI")
@@ -94,6 +121,10 @@ def build_parser() -> argparse.ArgumentParser:
     setup = sub.add_parser("setup", help="build local data, RUL model and ground truth")
     setup.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     setup.set_defaults(func=cmd_setup)
+
+    ask = sub.add_parser("ask", help="ask the agent a question")
+    ask.add_argument("question")
+    ask.set_defaults(func=cmd_ask)
 
     ev = sub.add_parser("eval", help="run the evaluation suite")
     ev.add_argument("--agent", choices=["copilot", "null"], default="copilot")
