@@ -1,40 +1,16 @@
 """Tests for the RUL baseline, on a synthetic fleet so CI needs no download.
 
 Each synthetic engine runs to failure; informative sensors drift in a known
-direction once wear starts, so we know what a correct model must learn.
+direction once wear starts (see conftest.py), so we know what a correct
+model must learn.
 """
 
 import numpy as np
-import pandas as pd
 import pytest
+from conftest import DIRECTION
 
 from maintenance_copilot.data.cmapss import INFORMATIVE_SENSORS, SENSORS
 from maintenance_copilot.rul import RULModel, assess_engine, nasa_score, status_for
-
-# +1 = sensor rises with wear, -1 = falls (matches FD001's real behaviour).
-DIRECTION = dict.fromkeys(INFORMATIVE_SENSORS, 1) | {"s7": -1, "s12": -1, "s20": -1, "s21": -1}
-
-
-def synthetic_fleet(n_units: int = 40, seed: int = 0) -> pd.DataFrame:
-    rng = np.random.default_rng(seed)
-    frames = []
-    for unit in range(1, n_units + 1):
-        life = int(rng.integers(150, 260))
-        cycle = np.arange(1, life + 1)
-        wear = np.clip((cycle - 0.4 * life) / (0.6 * life), 0, None) ** 2
-        data = {"unit": unit, "cycle": cycle, "setting1": 0.0, "setting2": 0.0, "setting3": 100.0}
-        for s in SENSORS:
-            if s in DIRECTION:
-                data[s] = 100 + DIRECTION[s] * 5 * wear + rng.normal(0, 0.5, life)
-            else:
-                data[s] = 100.0
-        frames.append(pd.DataFrame(data))
-    return pd.concat(frames, ignore_index=True)
-
-
-@pytest.fixture(scope="module")
-def fleet():
-    return synthetic_fleet()
 
 
 @pytest.fixture(scope="module")
