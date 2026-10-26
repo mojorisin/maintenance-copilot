@@ -28,6 +28,18 @@ def test_select_returns_rows_and_work_order_sources(data_env):
     assert set(r["sources"][1:]) == {row[0] for row in r["rows"]}
 
 
+def test_aggregated_work_order_ids_are_cited(data_env):
+    # Regression: the agent often uses GROUP_CONCAT(wo_id); those IDs are real
+    # tool output and must count as citable sources.
+    r = query_work_orders(
+        "SELECT asset_id, GROUP_CONCAT(wo_id) AS wos FROM work_orders "
+        "WHERE asset_id = 'P-104' GROUP BY asset_id"
+    )
+    cited = set(r["sources"][1:])
+    assert cited == set(r["rows"][0][1].split(","))
+    assert all(s.startswith("WO-") for s in cited)
+
+
 def test_aggregate_query_cites_the_query(data_env):
     r = query_work_orders("SELECT COUNT(*) FROM assets")
     assert r["rows"] == [[40]]

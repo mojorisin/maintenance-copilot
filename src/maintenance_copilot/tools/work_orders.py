@@ -12,6 +12,7 @@ would stop a write on its own:
 """
 
 import hashlib
+import re
 import sqlite3
 import time
 
@@ -19,6 +20,7 @@ from maintenance_copilot import config
 
 MAX_ROWS = 200
 TIMEOUT_SECONDS = 2.0
+WO_ID_RE = re.compile(r"\bWO-\d{5}\b")
 
 SCHEMA_DOC = f"""\
 SQLite database of maintenance work orders. Today's date is {config.AS_OF_DATE.isoformat()};
@@ -95,10 +97,12 @@ def query_work_orders(sql: str) -> dict:
 
     truncated = len(rows) > MAX_ROWS
     rows = [list(r) for r in rows[:MAX_ROWS]]
-    sources = [query_id]
-    if "wo_id" in columns:
-        i = columns.index("wo_id")
-        sources += sorted({r[i] for r in rows if r[i]})
+    # Cite every work-order ID that appears anywhere in the result, including
+    # aggregated cells such as GROUP_CONCAT(wo_id) -> "WO-00235,WO-00260".
+    wo_ids = {
+        m for r in rows for cell in r if isinstance(cell, str) for m in WO_ID_RE.findall(cell)
+    }
+    sources = [query_id, *sorted(wo_ids)]
     return {
         "sql": sql,
         "columns": columns,
