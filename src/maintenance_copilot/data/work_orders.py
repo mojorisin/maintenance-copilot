@@ -434,7 +434,7 @@ PLANTED_EVENTS = [
         "compressor fouling",
         14,
         26_000,
-        "Rising HPC outlet temperature (T30) and falling static pressure (Ps30). "
+        "Rising HPC outlet temperature (T30) and falling HPC outlet pressure (P30). "
         "Water wash done; trend to be monitored.",
     ),
     # 4. Costly outlier
