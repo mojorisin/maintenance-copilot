@@ -13,6 +13,8 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 DATA_DIR = Path(os.getenv("MC_DATA_DIR", REPO_ROOT / "data"))
 WORK_ORDERS_DB = DATA_DIR / "work_orders.db"
 GROUND_TRUTH_FILE = DATA_DIR / "ground_truth.json"
+CMAPSS_DIR = DATA_DIR / "cmapss"
+RUL_MODEL_FILE = DATA_DIR / "rul_model.json"
 
 # The synthetic data ends on 2026-09-30, and the agent treats AS_OF_DATE as
 # "today". Pinning it keeps questions like "last quarter" (= Q3 2026) stable,

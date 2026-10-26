@@ -6,7 +6,10 @@ readme = "README.md"
 license = "MIT"
 authors = [{ name = "mojorisin" }]
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "numpy==2.5.4",
+    "pandas==3.1.0",
+]
 
 [project.scripts]
 mc = "maintenance_copilot.cli:main"
