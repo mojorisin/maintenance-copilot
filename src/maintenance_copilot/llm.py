@@ -74,29 +74,28 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
             model_kwargs=model_kwargs,
         )
 
+    # Other providers: validate configuration first, then import the package,
+    # so every config problem is reported before asking for an install.
     if provider in ("openai", "openrouter"):
+        model = _require_model(provider, model)
+        if provider == "openai":
+            extra = {"api_key": _require_key("OPENAI_API_KEY")}
+        else:
+            extra = {"api_key": _require_key("OPENROUTER_API_KEY"), "base_url": OPENROUTER_BASE_URL}
         try:
             from langchain_openai import ChatOpenAI
         except ImportError:
             raise _install_hint("openai") from None
-        if provider == "openai":
-            return ChatOpenAI(
-                model=_require_model(provider, model), api_key=_require_key("OPENAI_API_KEY")
-            )
-        return ChatOpenAI(
-            model=_require_model(provider, model),
-            api_key=_require_key("OPENROUTER_API_KEY"),
-            base_url=OPENROUTER_BASE_URL,
-        )
+        return ChatOpenAI(model=model, **extra)
 
     if provider == "google":
+        model = _require_model(provider, model)
+        key = _require_key("GOOGLE_API_KEY")
         try:
             from langchain_google_genai import ChatGoogleGenerativeAI
         except ImportError:
             raise _install_hint("google") from None
-        return ChatGoogleGenerativeAI(
-            model=_require_model(provider, model), google_api_key=_require_key("GOOGLE_API_KEY")
-        )
+        return ChatGoogleGenerativeAI(model=model, google_api_key=key)
 
     raise ProviderError(
         f"Unknown LLM_PROVIDER '{provider}'. Use anthropic, openai, google or openrouter."
