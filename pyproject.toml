@@ -1,0 +1,34 @@
+[project]
+name = "maintenance-copilot"
+version = "0.1.0"
+description = "Agentic assistant over maintenance work orders, sensor data and equipment manuals — reference architecture for industrial and energy operations"
+readme = "README.md"
+license = "MIT"
+authors = [{ name = "mojorisin" }]
+requires-python = ">=3.12"
+dependencies = []
+
+[project.scripts]
+mc = "maintenance_copilot.cli:main"
+
+[build-system]
+requires = ["uv_build>=0.13.5,<0.14.0"]
+build-backend = "uv_build"
+
+[dependency-groups]
+dev = [
+    "pytest==9.1.1",
+    "ruff==0.17.2",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+# pycodestyle, pyflakes, import sorting, bugbear, pyupgrade, simplify
+select = ["E", "F", "I", "B", "UP", "SIM"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"

@@ -1,0 +1,37 @@
+# --- Secrets: never commit ---
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+
+# --- Generated and downloaded data (rebuilt by `mc setup`) ---
+# Leading slash = only the top-level folder, not src/maintenance_copilot/data/
+/data/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Eval run outputs (the committed summary lives in evals/results/) ---
+evals/runs/
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+.venv/
+*.egg-info/
+build/
+dist/
+
+# --- Tool caches ---
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+.streamlit/secrets.toml
+
+# --- OS / editor ---
+.DS_Store
+.idea/
+.vscode/
