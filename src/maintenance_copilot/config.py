@@ -9,6 +9,7 @@ from datetime import date
 from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
+MANUALS_DIR = REPO_ROOT / "manuals"
 
 DATA_DIR = Path(os.getenv("MC_DATA_DIR", REPO_ROOT / "data"))
 WORK_ORDERS_DB = DATA_DIR / "work_orders.db"
