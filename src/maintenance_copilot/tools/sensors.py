@@ -12,8 +12,8 @@ from pathlib import Path
 import pandas as pd
 
 from maintenance_copilot import config
-from maintenance_copilot.data.cmapss import load_fd001
-from maintenance_copilot.rul import RULModel, assess_engine
+from maintenance_copilot.data.cmapss import SENSORS, load_fd001
+from maintenance_copilot.rul import BASELINE_CYCLES, RULModel, assess_engine
 
 MODEL_SOURCE = "model:rul-baseline"
 
@@ -38,6 +38,26 @@ def normalise_asset_id(raw: str) -> str:
     if match and not raw.strip().upper().startswith(("P-", "C-", "V-")):
         return f"GT-{int(match.group(1)):03d}"
     return raw.strip().upper()
+
+
+def drift_series(asset_id: str, tags: list[str]) -> pd.DataFrame:
+    """Per-cycle drift of the given sensor tags, for charting (not an agent tool).
+
+    Each column is the 10-cycle rolling mean minus the engine's early-life
+    baseline, divided by normal noise: the same units as `drift_sigma`.
+    """
+    unit = _turbines()[normalise_asset_id(asset_id)]["cmapss_unit"]
+    history, model = _load(str(config.CMAPSS_DIR), str(config.RUL_MODEL_FILE))
+    engine = history[history["unit"] == unit].set_index("cycle")
+    by_tag = {meta[0]: s for s, meta in SENSORS.items()}
+    out = {}
+    for tag in tags:
+        col = by_tag[tag]
+        base = engine[col].head(BASELINE_CYCLES).mean()
+        out[tag] = (
+            engine[col].rolling(model.window, min_periods=1).mean() - base
+        ) / model.noise_std[col]
+    return pd.DataFrame(out)
 
 
 def get_sensor_trend(asset_id: str | None = None) -> dict:
