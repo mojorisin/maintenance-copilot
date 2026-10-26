@@ -6,6 +6,7 @@ mc ask     ask the agent a question from the terminal
 """
 
 import argparse
+from pathlib import Path
 
 from maintenance_copilot import __version__, config
 
@@ -68,17 +69,30 @@ def cmd_eval(args: argparse.Namespace) -> int:
     cases = evaluation.load_cases()
     if args.case:
         cases = [c for c in cases if c["id"] in args.case]
-    if args.agent == "null":
-        agent = evaluation.null_agent
+    label = args.label
+
+    if args.rescore:
+        if label is None:
+            print("--rescore needs --label, e.g. --label effort-low")
+            return 1
+        print(f"Re-scoring stored answers in {args.rescore} (no API calls)...")
+        suite = evaluation.rescore(args.rescore, cases, truth)
     else:
-        from maintenance_copilot.agent import build_agent
+        if args.agent == "null":
+            agent = evaluation.null_agent
+        else:
+            from maintenance_copilot.agent import build_agent
 
-        agent = build_agent()
-
-    print(f"Running {len(cases)} cases x {args.trials} trials with the {args.agent} agent...")
-    suite = evaluation.run_suite(agent, cases, truth, trials=args.trials, workers=args.workers)
+            agent = build_agent()
+        print(f"Running {len(cases)} cases x {args.trials} trials with the {args.agent} agent...")
+        suite = evaluation.run_suite(agent, cases, truth, trials=args.trials, workers=args.workers)
+        if label is None and args.agent == "copilot" and config.LLM_PROVIDER == "anthropic":
+            label = f"effort-{config.LLM_EFFORT}"
     md, log = evaluation.save(
-        suite, config.REPO_ROOT / "evals" / "results", config.REPO_ROOT / "evals" / "runs"
+        suite,
+        config.REPO_ROOT / "evals" / "results",
+        config.REPO_ROOT / "evals" / "runs",
+        label=label or "",
     )
     print(md.read_text())
     print(f"Summary: {md}\nFull run log: {log}")
@@ -131,6 +145,13 @@ def build_parser() -> argparse.ArgumentParser:
     ev.add_argument("--trials", type=int, default=3, help="runs per case (default: 3)")
     ev.add_argument("--workers", type=int, default=4, help="parallel runs (default: 4)")
     ev.add_argument("--case", action="append", help="only run this case id (repeatable)")
+    ev.add_argument("--label", help="suffix for result files (default: effort-<LLM_EFFORT>)")
+    ev.add_argument(
+        "--rescore",
+        type=Path,
+        metavar="LOG",
+        help="re-score a stored run log with the current checks (free; scorer changes only)",
+    )
     ev.set_defaults(func=cmd_eval)
     return parser
 

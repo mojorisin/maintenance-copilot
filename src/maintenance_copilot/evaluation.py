@@ -17,7 +17,7 @@ from datetime import datetime
 from pathlib import Path
 
 from maintenance_copilot import config
-from maintenance_copilot.trace import AgentRun
+from maintenance_copilot.trace import AgentRun, ToolCall
 
 CASES_FILE = config.REPO_ROOT / "evals" / "cases.toml"
 
@@ -216,6 +216,41 @@ def run_suite(
     return SuiteResult(results=results, model=model, trials=trials)
 
 
+def rescore(log_path: Path, cases: list[dict], truth: dict) -> SuiteResult:
+    """Re-score the stored answers in a run log with the current checks.
+
+    Use this when only the *scorer* changed: the answers are identical, so
+    re-scoring gives exactly the verdicts a new run of those answers would,
+    at no cost. If the agent, prompt or tools change, run the suite again.
+    """
+    by_id = {c["id"]: c for c in cases}
+    results = []
+    for line in log_path.read_text().splitlines():
+        row = json.loads(line)
+        case = by_id.get(row["case"])
+        if case is None:
+            continue
+        calls = [ToolCall(**c) for c in row["tool_calls"]]
+        fields = {k: row[k] for k in AgentRun.__dataclass_fields__ if k in row}
+        run = AgentRun(**{**fields, "tool_calls": calls})
+        db_changed = any(f.startswith("db_unchanged") for f in row.get("failures", []))
+        checks = score(case, run, truth, db_changed=db_changed)
+        results.append(
+            CaseResult(
+                case_id=case["id"],
+                category=case["category"],
+                trial=row["trial"],
+                passed=all(c.passed for c in checks),
+                checks=checks,
+                run=run,
+                cost_usd=run_cost(run),
+            )
+        )
+    trials = max(r.trial for r in results)
+    started = log_path.stem.rsplit("-", 1)[-1] + " (re-scored)"
+    return SuiteResult(results=results, model=results[0].run.model, trials=trials, started=started)
+
+
 # --- reporting -----------------------------------------------------------------------
 
 
@@ -288,12 +323,20 @@ def to_markdown(summary: dict) -> str:
     return "\n".join(lines) + "\n"
 
 
-def save(suite: SuiteResult, results_dir: Path, runs_dir: Path) -> tuple[Path, Path]:
-    """Write the committed summary (markdown + json) and the full run log (jsonl)."""
+def save(
+    suite: SuiteResult, results_dir: Path, runs_dir: Path, label: str = ""
+) -> tuple[Path, Path]:
+    """Write the committed summary (markdown + json) and the full run log (jsonl).
+
+    `label` distinguishes runs of the same model with different settings,
+    e.g. "effort-low"; it is appended to the file names and report title.
+    """
     summary = summarise(suite)
+    if label:
+        summary["model"] = f"{suite.model} ({label})"
     results_dir.mkdir(parents=True, exist_ok=True)
     runs_dir.mkdir(parents=True, exist_ok=True)
-    stem = suite.model.replace("/", "_")
+    stem = suite.model.replace("/", "_") + (f"-{label}" if label else "")
     md = results_dir / f"{stem}.md"
     md.write_text(to_markdown(summary))
     (results_dir / f"{stem}.json").write_text(json.dumps(summary, indent=2) + "\n")
