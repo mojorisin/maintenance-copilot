@@ -77,7 +77,34 @@ def test_follow_up_receives_history(app):
     assert "(history turns: 1)" in _text(app.chat_message[3])
 
 
-def test_missing_data_shows_setup_instructions(app, monkeypatch, tmp_path):
-    monkeypatch.setattr(config, "WORK_ORDERS_DB", tmp_path / "missing.db")
+def test_missing_data_is_built_on_first_launch(app, monkeypatch, tmp_path):
+    from maintenance_copilot.data import build
+
+    calls = []
+    monkeypatch.setattr(config, "GROUND_TRUTH_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(build, "build_all", lambda log: calls.append(log))
     app.run()
+    assert calls, "app should build the data folder when it is missing"
+    assert not app.error
+
+
+def test_data_build_failure_shows_instructions(app, monkeypatch, tmp_path):
+    from maintenance_copilot.data import build
+
+    def offline(log):
+        raise RuntimeError("no network")
+
+    monkeypatch.setattr(config, "GROUND_TRUTH_FILE", tmp_path / "missing.json")
+    monkeypatch.setattr(build, "build_all", offline)
+    app.run()
+    assert "no network" in app.error[0].value
     assert "mc setup" in app.error[0].value
+
+
+def test_session_question_limit(app, monkeypatch):
+    monkeypatch.setattr(config, "SESSION_QUESTION_LIMIT", 1)
+    app.run()
+    app.chat_input[0].set_value("First").run()
+    app.chat_input[0].set_value("Second").run()
+    assert len(app.session_state.turns) == 1
+    assert "allows 1 questions per session" in app.info[0].value

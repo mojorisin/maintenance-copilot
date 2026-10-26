@@ -19,6 +19,10 @@ load_dotenv(REPO_ROOT / ".env", override=False)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 LLM_MODEL = os.getenv("LLM_MODEL") or None
 LLM_EFFORT = os.getenv("LLM_EFFORT", "medium")  # Claude only: low | medium | high | xhigh
+
+# Web app only: max questions per browser session (0 = unlimited). Set it on a
+# public deployment so visitors can't run up the API bill.
+SESSION_QUESTION_LIMIT = int(os.getenv("MC_SESSION_QUESTION_LIMIT", "0"))
 MANUALS_DIR = REPO_ROOT / "manuals"
 
 DATA_DIR = Path(os.getenv("MC_DATA_DIR", REPO_ROOT / "data"))

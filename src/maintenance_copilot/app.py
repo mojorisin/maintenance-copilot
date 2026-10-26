@@ -6,14 +6,30 @@ tokens and cost, so a user can check the answer instead of trusting it.
 """
 
 import json
+import os
+import sys
+from pathlib import Path
 
 import pandas as pd
 import streamlit as st
 
-from maintenance_copilot import config
-from maintenance_copilot.evaluation import run_cost
-from maintenance_copilot.llm import ProviderError
-from maintenance_copilot.trace import AgentRun, ToolCall
+# Hosted deployments (e.g. Streamlit Community Cloud) run this file directly:
+# 1. make the package importable from src/ even if it isn't installed, and
+# 2. expose Streamlit secrets as environment variables, since settings and
+#    API keys are read from the environment.
+# Both must happen before the maintenance_copilot imports below.
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+try:
+    for _key, _value in st.secrets.items():
+        if isinstance(_value, str | int | float | bool):
+            os.environ.setdefault(_key, str(_value))
+except Exception:  # no secrets configured (normal for local runs with .env)
+    pass
+
+from maintenance_copilot import config  # noqa: E402
+from maintenance_copilot.evaluation import run_cost  # noqa: E402
+from maintenance_copilot.llm import ProviderError  # noqa: E402
+from maintenance_copilot.trace import AgentRun, ToolCall  # noqa: E402
 
 EXAMPLES = [
     "Which pumps had repeat failures in the last quarter?",
@@ -37,6 +53,16 @@ def get_agent():
     from maintenance_copilot.agent import build_agent
 
     return build_agent()
+
+
+@st.cache_resource(show_spinner=False)
+def ensure_data() -> bool:
+    """Build the git-ignored data folder on first launch (hosted deployments)."""
+    from maintenance_copilot.data.build import build_all, data_ready
+
+    if not data_ready():
+        build_all(log=lambda _: None)
+    return True
 
 
 def describe_step(name: str, args: dict) -> str:
@@ -157,12 +183,19 @@ with st.sidebar:
     effort = f", effort {config.LLM_EFFORT}" if config.LLM_PROVIDER == "anthropic" else ""
     st.caption(f"Model: {config.LLM_PROVIDER} · {config.LLM_MODEL or 'claude-opus-5-5'}{effort}")
     st.caption("Read-only access. Every claim cites its source; open “How I got this” to check.")
+    limit = config.SESSION_QUESTION_LIMIT
+    if limit:
+        left = max(limit - len(st.session_state.turns), 0)
+        st.caption(f"Public demo: {left} of {limit} questions left in this session.")
     if st.button("Clear conversation", width="stretch"):
         st.session_state.turns = []
         st.rerun()
 
-if not config.WORK_ORDERS_DB.exists() or not config.RUL_MODEL_FILE.exists():
-    st.error("Local data not found. Run `uv run mc setup` first (about 5 seconds).")
+try:
+    with st.spinner("Preparing data on first launch (a few seconds)…"):
+        ensure_data()
+except Exception as exc:
+    st.error(f"Couldn't prepare the data ({exc}). Locally, run `uv run mc setup`.")
     st.stop()
 
 for run in st.session_state.turns:
@@ -174,6 +207,13 @@ for run in st.session_state.turns:
 
 question = st.chat_input("Ask about assets, failures, sensors or manuals…")
 question = question or st.session_state.pop("pending", None)
+
+if question and limit and len(st.session_state.turns) >= limit:
+    st.info(
+        f"This public demo allows {limit} questions per session to keep API costs bounded. "
+        "Clone the repo to run it with your own key: see the README quickstart."
+    )
+    question = None
 
 if question:
     with st.chat_message("user"):
