@@ -8,7 +8,17 @@ import os
 from datetime import date
 from pathlib import Path
 
+from dotenv import load_dotenv
+
 REPO_ROOT = Path(__file__).resolve().parents[2]
+
+# API keys and provider settings come from .env (git-ignored). Real
+# environment variables take precedence over the file.
+load_dotenv(REPO_ROOT / ".env", override=False)
+
+LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
+LLM_MODEL = os.getenv("LLM_MODEL") or None
+LLM_EFFORT = os.getenv("LLM_EFFORT", "medium")  # Claude only: low | medium | high | xhigh
 MANUALS_DIR = REPO_ROOT / "manuals"
 
 DATA_DIR = Path(os.getenv("MC_DATA_DIR", REPO_ROOT / "data"))
