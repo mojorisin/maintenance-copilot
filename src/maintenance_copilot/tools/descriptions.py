@@ -7,10 +7,12 @@ check meaningful.
 
 from maintenance_copilot.tools.work_orders import SCHEMA_DOC
 
+# Stripped: LangChain trims local tool descriptions but MCP sends them verbatim,
+# so a trailing newline would make the two paths differ by one character.
 QUERY_WORK_ORDERS = (
     "Run ONE read-only SQLite SELECT (max 200 rows). Include wo_id in the SELECT "
     "when you will cite individual work orders.\n\n" + SCHEMA_DOC
-)
+).strip()
 
 GET_SENSOR_TREND = (
     "Remaining useful life estimate (cycles), range, status (healthy/watch/critical) "

@@ -48,16 +48,35 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"Re-scoring stored answers in {args.rescore} (no API calls)...")
         suite = evaluation.rescore(args.rescore, cases, truth)
     else:
-        if args.agent == "null":
-            agent = evaluation.null_agent
-        else:
-            from maintenance_copilot.agent import build_agent
+        import contextlib
 
-            agent = build_agent()
-        print(f"Running {len(cases)} cases x {args.trials} trials with the {args.agent} agent...")
-        suite = evaluation.run_suite(agent, cases, truth, trials=args.trials, workers=args.workers)
-        if label is None and args.agent == "copilot" and config.LLM_PROVIDER == "anthropic":
-            label = f"effort-{config.LLM_EFFORT}"
+        with contextlib.ExitStack() as stack:
+            if args.agent == "null":
+                agent = evaluation.null_agent
+            else:
+                from maintenance_copilot.agent import build_agent
+
+                tool_list = None
+                if args.agent == "copilot-mcp":
+                    # Same agent, but every tool call travels over MCP to a real
+                    # `mc mcp` subprocess on stdio, as Claude Desktop would use it.
+                    import sys
+
+                    from mcp import StdioServerParameters
+
+                    from maintenance_copilot.mcp_bridge import MCPToolBridge
+
+                    server = StdioServerParameters(
+                        command=sys.executable, args=["-m", "maintenance_copilot.cli", "mcp"]
+                    )
+                    tool_list = stack.enter_context(MCPToolBridge(server)).langchain_tools()
+                agent = build_agent(tool_list=tool_list)
+            print(f"Running {len(cases)} cases x {args.trials} trials, {args.agent} agent...")
+            suite = evaluation.run_suite(
+                agent, cases, truth, trials=args.trials, workers=args.workers
+            )
+        if label is None and args.agent != "null" and config.LLM_PROVIDER == "anthropic":
+            label = f"effort-{config.LLM_EFFORT}" + ("-mcp" if args.agent == "copilot-mcp" else "")
     md, log = evaluation.save(
         suite,
         config.REPO_ROOT / "evals" / "results",
@@ -152,7 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask.set_defaults(func=cmd_ask)
 
     ev = sub.add_parser("eval", help="run the evaluation suite")
-    ev.add_argument("--agent", choices=["copilot", "null"], default="copilot")
+    ev.add_argument(
+        "--agent",
+        choices=["copilot", "copilot-mcp", "null"],
+        default="copilot",
+        help="copilot-mcp: same agent, tools served over MCP (stdio subprocess)",
+    )
     ev.add_argument("--trials", type=int, default=3, help="runs per case (default: 3)")
     ev.add_argument("--workers", type=int, default=4, help="parallel runs (default: 4)")
     ev.add_argument("--case", action="append", help="only run this case id (repeatable)")
