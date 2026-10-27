@@ -23,7 +23,7 @@ from langgraph.graph.message import add_messages
 from maintenance_copilot import tools
 from maintenance_copilot.llm import get_chat_model, model_name
 from maintenance_copilot.prompts import SYSTEM_PROMPT
-from maintenance_copilot.tools.work_orders import SCHEMA_DOC
+from maintenance_copilot.tools import descriptions as desc
 from maintenance_copilot.trace import AgentRun, ToolCall
 
 MAX_TOOL_ROUNDS = 8
@@ -46,32 +46,15 @@ def _search_manuals(query: str, asset_type: str | None = None) -> dict:
 
 TOOLS = [
     StructuredTool.from_function(
-        _query_work_orders,
-        name="query_work_orders",
-        description=(
-            "Run ONE read-only SQLite SELECT (max 200 rows). Include wo_id in the SELECT "
-            "when you will cite individual work orders.\n\n" + SCHEMA_DOC
-        ),
+        _query_work_orders, name="query_work_orders", description=desc.QUERY_WORK_ORDERS
     ),
     StructuredTool.from_function(
-        _get_sensor_trend,
-        name="get_sensor_trend",
-        description=(
-            "Remaining useful life estimate (cycles), range, status (healthy/watch/critical) "
-            "and most-drifted sensors for one gas turbine, e.g. asset_id='GT-042'. Omit "
-            "asset_id for a fleet overview sorted most urgent first. Gas turbines only."
-        ),
+        _get_sensor_trend, name="get_sensor_trend", description=desc.GET_SENSOR_TREND
     ),
     StructuredTool.from_function(
-        _search_manuals,
-        name="search_manuals",
-        description=(
-            "Keyword search over equipment manuals; returns sections with citation IDs. "
-            "Use technical terms. asset_type: 'pump', 'compressor' or 'gas_turbine'."
-        ),
+        _search_manuals, name="search_manuals", description=desc.SEARCH_MANUALS
     ),
 ]
-_TOOLS_BY_NAME = {t.name: t for t in TOOLS}
 
 
 # --- graph ---------------------------------------------------------------------------
@@ -83,10 +66,16 @@ class State(TypedDict):
     rounds: int
 
 
-def build_graph(llm=None):
-    """Compile the agent graph around a tool-calling chat model."""
+def build_graph(llm=None, tool_list: list[StructuredTool] | None = None):
+    """Compile the agent graph around a tool-calling chat model.
+
+    `tool_list` defaults to the direct, in-process tools; the MCP parity eval
+    passes tools that call the same functions through an MCP server instead.
+    """
     llm = llm or get_chat_model()
-    model = llm.bind_tools(TOOLS)
+    tool_list = tool_list or TOOLS
+    tools_by_name = {t.name: t for t in tool_list}
+    model = llm.bind_tools(tool_list)
     system = SystemMessage(SYSTEM_PROMPT)
 
     def agent_node(state: State) -> dict:
@@ -97,7 +86,7 @@ def build_graph(llm=None):
         messages, log = [], []
         for call in last.tool_calls:
             start = time.monotonic()
-            tool = _TOOLS_BY_NAME.get(call["name"])
+            tool = tools_by_name.get(call["name"])
             try:
                 result = tool.invoke(call["args"]) if tool else {"error": "Unknown tool."}
             except Exception as exc:  # bad arguments etc.: let the model retry
@@ -142,7 +131,7 @@ def _final_answer(last: AIMessage) -> str:
     return last.text
 
 
-def build_agent(llm=None):
+def build_agent(llm=None, tool_list: list[StructuredTool] | None = None):
     """Return `ask(question, history) -> AgentRun`, used by the CLI, UI and evals.
 
     `history` is earlier (question, answer) pairs, so the chat UI can handle
@@ -153,7 +142,7 @@ def build_agent(llm=None):
     `on_tool_start(name, args)` is called as each tool call is decided, so
     a UI can show progress live instead of a bare spinner.
     """
-    graph, name = build_graph(llm)
+    graph, name = build_graph(llm, tool_list)
 
     def ask(
         question: str,
