@@ -4,6 +4,7 @@ mc setup   build local data: work orders, C-MAPSS download, RUL model, ground tr
 mc eval    run the evaluation suite (`--agent null` for the do-nothing baseline)
 mc ask     ask the agent a question from the terminal
 mc app     launch the Streamlit chat UI
+mc mcp     serve the tools, resources and prompts over MCP
 """
 
 import argparse
@@ -47,16 +48,35 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"Re-scoring stored answers in {args.rescore} (no API calls)...")
         suite = evaluation.rescore(args.rescore, cases, truth)
     else:
-        if args.agent == "null":
-            agent = evaluation.null_agent
-        else:
-            from maintenance_copilot.agent import build_agent
+        import contextlib
 
-            agent = build_agent()
-        print(f"Running {len(cases)} cases x {args.trials} trials with the {args.agent} agent...")
-        suite = evaluation.run_suite(agent, cases, truth, trials=args.trials, workers=args.workers)
-        if label is None and args.agent == "copilot" and config.LLM_PROVIDER == "anthropic":
-            label = f"effort-{config.LLM_EFFORT}"
+        with contextlib.ExitStack() as stack:
+            if args.agent == "null":
+                agent = evaluation.null_agent
+            else:
+                from maintenance_copilot.agent import build_agent
+
+                tool_list = None
+                if args.agent == "copilot-mcp":
+                    # Same agent, but every tool call travels over MCP to a real
+                    # `mc mcp` subprocess on stdio, as Claude Desktop would use it.
+                    import sys
+
+                    from mcp import StdioServerParameters
+
+                    from maintenance_copilot.mcp_bridge import MCPToolBridge
+
+                    server = StdioServerParameters(
+                        command=sys.executable, args=["-m", "maintenance_copilot.cli", "mcp"]
+                    )
+                    tool_list = stack.enter_context(MCPToolBridge(server)).langchain_tools()
+                agent = build_agent(tool_list=tool_list)
+            print(f"Running {len(cases)} cases x {args.trials} trials, {args.agent} agent...")
+            suite = evaluation.run_suite(
+                agent, cases, truth, trials=args.trials, workers=args.workers
+            )
+        if label is None and args.agent != "null" and config.LLM_PROVIDER == "anthropic":
+            label = f"effort-{config.LLM_EFFORT}" + ("-mcp" if args.agent == "copilot-mcp" else "")
     md, log = evaluation.save(
         suite,
         config.REPO_ROOT / "evals" / "results",
@@ -95,6 +115,28 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_mcp(args: argparse.Namespace) -> int:
+    """Serve the tools, resources and prompts over MCP.
+
+    stdout is the protocol channel in stdio mode, so all messages go to stderr.
+    HTTP binds to 127.0.0.1 only; public hosting needs authentication (planned).
+    """
+    import sys
+
+    from maintenance_copilot.data.build import build_all, data_ready
+
+    if not data_ready():
+        build_all(log=lambda msg: print(msg, file=sys.stderr))
+    from maintenance_copilot.mcp_server import mcp
+
+    if args.transport == "stdio":
+        mcp.run("stdio")
+    else:
+        print(f"MCP server on http://127.0.0.1:{args.port}/mcp (local only)", file=sys.stderr)
+        mcp.run("streamable-http", host="127.0.0.1", port=args.port)
+    return 0
+
+
 def cmd_app(args: argparse.Namespace) -> int:
     """Launch the Streamlit chat UI."""
     import subprocess
@@ -115,6 +157,11 @@ def build_parser() -> argparse.ArgumentParser:
     setup.add_argument("--seed", type=int, default=42, help="random seed (default: 42)")
     setup.set_defaults(func=cmd_setup)
 
+    mcp = sub.add_parser("mcp", help="serve the tools over MCP (Claude Desktop, Claude Code...)")
+    mcp.add_argument("--transport", choices=["stdio", "http"], default="stdio")
+    mcp.add_argument("--port", type=int, default=8000, help="HTTP port (default: 8000)")
+    mcp.set_defaults(func=cmd_mcp)
+
     app = sub.add_parser("app", help="launch the Streamlit chat UI")
     app.add_argument("--port", type=int, default=8501)
     app.set_defaults(func=cmd_app)
@@ -124,7 +171,12 @@ def build_parser() -> argparse.ArgumentParser:
     ask.set_defaults(func=cmd_ask)
 
     ev = sub.add_parser("eval", help="run the evaluation suite")
-    ev.add_argument("--agent", choices=["copilot", "null"], default="copilot")
+    ev.add_argument(
+        "--agent",
+        choices=["copilot", "copilot-mcp", "null"],
+        default="copilot",
+        help="copilot-mcp: same agent, tools served over MCP (stdio subprocess)",
+    )
     ev.add_argument("--trials", type=int, default=3, help="runs per case (default: 3)")
     ev.add_argument("--workers", type=int, default=4, help="parallel runs (default: 4)")
     ev.add_argument("--case", action="append", help="only run this case id (repeatable)")

@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "maintenance-copilot": {
+      "command": "uv",
+      "args": ["run", "mc", "mcp"]
+    }
+  }
+}

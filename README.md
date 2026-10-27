@@ -39,11 +39,15 @@ It answers questions like:
 ```mermaid
 flowchart LR
     U["Maintenance engineer"] --> UI["Streamlit chat UI<br/>or mc ask CLI"]
+    U2["Engineer in Claude Desktop,<br/>Claude Code or any MCP client"] --> MCP["MCP server · mc mcp<br/>stdio or localhost HTTP"]
     UI --> A["LangGraph agent<br/>agent ⇄ tools loop, max 8 rounds"]
     A <--> LLM["LLM via provider switch<br/>Claude default · OpenAI · Gemini · OpenRouter"]
     A --> T1["query_work_orders<br/>model-written, read-only SQL"]
     A --> T2["get_sensor_trend<br/>remaining-life estimate + sensor drift"]
     A --> T3["search_manuals<br/>BM25 keyword search"]
+    MCP --> T1
+    MCP --> T2
+    MCP --> T3
     T1 --> DB[("SQLite<br/>40 assets · 291 work orders")]
     T2 --> CM[("NASA C-MAPSS FD001<br/>sensor histories")]
     T2 --> RM["Ridge regression<br/>RUL model"]
@@ -85,13 +89,58 @@ Other commands:
 
 ```bash
 uv run mc ask "Which pumps had repeat failures in the last quarter?"   # one question, in the terminal
-uv run pytest                                                         # 103 offline tests, no API key needed
+uv run mc mcp                                                         # serve the tools over MCP (see below)
+uv run pytest                                                         # 127 offline tests, no API key needed
 uv run mc eval --agent null --trials 1                                # eval harness, free baseline
 uv run mc eval                                                        # full eval: 54 runs, ~$2 on Opus 5.5
 ```
 
 To use a different model, set `LLM_PROVIDER` and `LLM_MODEL` in `.env`. OpenAI and Gemini need
 `uv sync --extra openai` or `--extra google`.
+
+## Use it from Claude Desktop or Claude Code (MCP)
+
+`mc mcp` serves the same tools, guardrails and citations over the
+[Model Context Protocol](https://modelcontextprotocol.io), so an engineer can use the
+maintenance data from the AI assistant they already work in. The server makes no LLM calls
+of its own (the client's model does the reasoning) and needs no API key.
+
+| Exposed | What |
+|---|---|
+| Tools | `query_work_orders`, `get_sensor_trend`, `search_manuals`, all marked read-only, with source IDs in every result |
+| Resources | `schema://work-orders`, `manual://index`, `manual://{manual_id}/{section}` (each citation ID is a readable URI), `model-card://rul` |
+| Prompts | `investigate_asset`, `prioritise_maintenance`, carrying the citation and prompt-injection rules to any client |
+
+First run `uv sync` and `uv run mc setup` in the cloned repo. Then:
+
+**Claude Code:** open the repo and approve the `maintenance-copilot` server from
+[`.mcp.json`](.mcp.json). To use it from any other folder:
+
+```bash
+claude mcp add maintenance-copilot -- uv --directory /absolute/path/to/maintenance-copilot run mc mcp
+```
+
+**Claude Desktop:** add this to `~/Library/Application Support/Claude/claude_desktop_config.json`
+(on macOS), then restart Claude Desktop:
+
+```json
+{
+  "mcpServers": {
+    "maintenance-copilot": {
+      "command": "/opt/homebrew/bin/uv",
+      "args": ["--directory", "/absolute/path/to/maintenance-copilot", "run", "mc", "mcp"]
+    }
+  }
+}
+```
+
+Use the full path to `uv` (`which uv` prints it), because desktop apps don't see your shell's
+`PATH`. **Quit Claude Desktop (⌘Q) before editing the file.** It stores its own settings there
+and rewrites the file when it starts, which drops an entry added while it was running.
+
+**Any other client:** `uv run mc mcp --transport http` serves Streamable HTTP at
+`http://127.0.0.1:8000/mcp`. It binds to localhost only, because a public endpoint needs
+authentication first (planned for v1.2).
 
 ## Example answers
 
@@ -143,6 +192,7 @@ Each question runs 3 times.
 | **Claude Opus 5.5, effort medium** (default) | **100%** | 18/18 | 100% | $0.040 | 14.0 s |
 | Claude Opus 5.5, effort low | 100% | 18/18 | 100% | $0.026 | 10.5 s |
 | Claude Sonnet 5.5, effort medium | 96% | 16/18 | 100% | $0.013 | 6.4 s |
+| Claude Opus 5.5, effort medium, **tools over MCP** (v1.1) | 100% | 18/18 | 100% | $0.039 | 13.4 s |
 | Null agent (declines everything) | 11% | 2/18 | – | – | – |
 
 What the numbers do and don't say (full analysis in [`evals/FAILURES.md`](evals/FAILURES.md)):
@@ -158,6 +208,11 @@ What the numbers do and don't say (full analysis in [`evals/FAILURES.md`](evals/
   section of a manual.
 - **It checks faithfulness to the tools, not truth.** No agent eval can catch a wrong tool,
   so the RUL model is scored separately (below).
+- **Serving the tools over MCP changed nothing measurable.** The same agent, with every tool
+  call sent to a real `mc mcp` subprocess over stdio, also scored 100%. A test asserts the model
+  sees byte-identical tool names, descriptions and parameters on both paths. MCP added about
+  3 ms per tool call (median), against roughly 13 s of model time per question. Because the
+  suite is saturated, this shows no regression, not proof of identical behaviour on harder cases.
 
 ### The remaining-life model
 
@@ -193,7 +248,9 @@ correctly **critical**.
 ## What I'd change for production
 
 - **Authentication and authorisation:** single sign-on, and tools scoped to the sites a user
-  may see, enforced in the SQL layer (row-level security) rather than the prompt.
+  may see, enforced in the SQL layer (row-level security) rather than the prompt. A hosted MCP
+  endpoint would use the OAuth 2.1 flow from the MCP specification, with per-user scopes and
+  rate limits.
 - **Observability:** trace every run (LangSmith is wired in via `.env`; OpenTelemetry in a
   larger stack). Track cost, latency, tool errors and refusal rates per question type, and alert
   on regressions.
@@ -220,12 +277,13 @@ correctly **critical**.
 src/maintenance_copilot/
   agent.py          LangGraph agent loop          llm.py        provider switch
   prompts.py        system prompt                 app.py        Streamlit UI
+  mcp_server.py     MCP server                    mcp_bridge.py agent tools over MCP (parity eval)
   tools/            the three tools               rul.py        remaining-life model
   data/             generators, NASA download,    manuals.py    BM25 search
                     ground truth                  evaluation.py eval harness
 manuals/            3 synthetic equipment manuals
 evals/              cases.toml, results/, FAILURES.md
-tests/              103 offline tests (no API key needed)
+tests/              127 offline tests (no API key needed)
 ```
 
 ## Data and credits
