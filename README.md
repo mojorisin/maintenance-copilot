@@ -135,7 +135,8 @@ claude mcp add maintenance-copilot -- uv --directory /absolute/path/to/maintenan
 ```
 
 Use the full path to `uv` (`which uv` prints it), because desktop apps don't see your shell's
-`PATH`.
+`PATH`. **Quit Claude Desktop (⌘Q) before editing the file.** It stores its own settings there
+and rewrites the file when it starts, which drops an entry added while it was running.
 
 **Any other client:** `uv run mc mcp --transport http` serves Streamable HTTP at
 `http://127.0.0.1:8000/mcp`. It binds to localhost only, because a public endpoint needs
