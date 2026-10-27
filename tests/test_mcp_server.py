@@ -111,6 +111,33 @@ def test_model_card_resource(data_env):
     assert card["validation_rmse_cycles"] > 0
 
 
+# --- the real command over stdio -------------------------------------------------------
+
+
+def test_mc_mcp_command_serves_over_stdio(data_env):
+    """Launch `mc mcp` as a subprocess, the way Claude Desktop or Claude Code would."""
+    import os
+    import sys
+
+    from mcp import StdioServerParameters
+
+    (data_env / "ground_truth.json").write_text("{}")  # so the command doesn't rebuild data
+    params = StdioServerParameters(
+        command=sys.executable,
+        args=["-m", "maintenance_copilot.cli", "mcp"],
+        env={**os.environ, "MC_DATA_DIR": str(data_env)},
+    )
+
+    async def main():
+        async with Client(params) as client:
+            r = await client.call_tool("get_sensor_trend", {"asset_id": "GT-042"})
+            return client.server_info.name, r.structured_content["status"]
+
+    name, status = anyio.run(main)
+    assert name == "maintenance-copilot"
+    assert status in {"healthy", "watch", "critical"}
+
+
 # --- prompts and instructions --------------------------------------------------------
 
 
