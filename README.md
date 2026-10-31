@@ -286,6 +286,12 @@ evals/              cases.toml, results/, FAILURES.md
 tests/              127 offline tests (no API key needed)
 ```
 
+## Working with AI coding agents
+
+[`AGENTS.md`](AGENTS.md) holds the shared instructions for AI coding agents: the rules, key
+commands and module map. Cline and Codex read it directly; `CLAUDE.md` and `GEMINI.md` just
+import it, so there is one source of truth.
+
 ## Data and credits
 
 - **Sensor data:** NASA C-MAPSS Turbofan Engine Degradation Simulation Data Set (A. Saxena,

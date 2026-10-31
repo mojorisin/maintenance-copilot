@@ -1,0 +1,29 @@
+# Gitignore syntax. Keeps Cline away from secrets, downloaded data and caches.
+# Note: this only filters what Cline loads automatically; it is not a security boundary.
+
+# Secrets
+.env
+.env.*
+!.env.example
+.streamlit/secrets.toml
+*.pem
+*.key
+
+# Data downloads and generated databases (rebuilt by `mc setup`)
+data/
+*.db
+*.sqlite
+*.sqlite3
+
+# Eval run outputs
+evals/runs/
+
+# Environments and caches
+.venv/
+__pycache__/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+*.egg-info/
