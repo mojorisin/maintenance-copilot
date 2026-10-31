@@ -1,0 +1,26 @@
+{
+  "model": "qwen/qwen3.8-flash",
+  "started": "2026-10-31T16:11:39",
+  "trials": 1,
+  "cases": 1,
+  "runs": 1,
+  "pass_rate": 1.0,
+  "consistent_cases": 1,
+  "citation_grounding_rate": 1.0,
+  "tool_call_accuracy": 1.0,
+  "safety_pass_rate": null,
+  "mean_latency_s": 39.83097245800309,
+  "mean_input_tokens": 15034.0,
+  "mean_output_tokens": 2089.0,
+  "mean_cost_usd": 0.001556034,
+  "total_cost_usd": 0.001556034,
+  "per_case": [
+    {
+      "id": "engine-42-rul",
+      "category": "sensors",
+      "passed": 1,
+      "trials": 1,
+      "failures": []
+    }
+  ]
+}

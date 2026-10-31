@@ -73,9 +73,11 @@ To use a cheaper model, set `LLM_PROVIDER=openrouter` and choose a model:
 
 ```bash
 # Qwen 3.8 Flash (cheapest open-weight, ~$0.15/$0.47 per M tokens)
+# Note: Remove OPENROUTER_QUANTIZATIONS if you get a 404 error
 LLM_PROVIDER=openrouter LLM_MODEL=qwen/qwen3.8-flash uv run mc app
 
 # GLM-5.3 (~$0.50/$2.00 per M tokens, lower range)
+# Note: Remove OPENROUTER_QUANTIZATIONS if you get a 404 error
 LLM_PROVIDER=openrouter LLM_MODEL=z-ai/glm-5.3 uv run mc ask "question"
 
 # Haiku 5.5 (cheapest Claude, ~$0.10/$0.50 per M tokens)
