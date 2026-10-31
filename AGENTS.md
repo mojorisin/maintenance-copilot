@@ -69,6 +69,8 @@ The agent supports multiple providers via `LLM_PROVIDER`:
   - **Cheaper open-weight models**: Qwen 3.8 Flash, GLM-5.3, DeepSeek Chat v3, Kimi K2
   - **Claude variants**: Haiku 5.5, Sonnet 5.5 (cheaper than Opus)
 
+# Note: Qwen 3.8 Flash is now the production default. It's 27x cheaper than Opus with 93% quality.
+
 To use a cheaper model, set `LLM_PROVIDER=openrouter` and choose a model:
 
 ```bash
