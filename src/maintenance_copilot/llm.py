@@ -82,6 +82,15 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
             extra = {"api_key": _require_key("OPENAI_API_KEY")}
         else:
             extra = {"api_key": _require_key("OPENROUTER_API_KEY"), "base_url": OPENROUTER_BASE_URL}
+            # OpenRouter routing: pin provider, quantization and disable fallbacks
+            # to ensure consistent pricing and behaviour between eval and production.
+            extra["extra_body"] = {}
+            if provider_order := os.getenv("OPENROUTER_PROVIDER"):
+                extra["extra_body"]["provider"] = {"order": provider_order.split(",")}
+            if quantizations := os.getenv("OPENROUTER_QUANTIZATIONS"):
+                extra["extra_body"]["provider"]["quantizations"] = quantizations.split(",")
+            # Prevent automatic fallback to a cheaper model on server-side refusal.
+            extra["extra_body"]["allow_fallbacks"] = False
         try:
             from langchain_openai import ChatOpenAI
         except ImportError:

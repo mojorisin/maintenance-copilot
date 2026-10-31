@@ -22,10 +22,19 @@ from maintenance_copilot.trace import AgentRun, ToolCall
 CASES_FILE = config.REPO_ROOT / "evals" / "cases.toml"
 
 # USD per million tokens (input, output, cache read). Anthropic list prices.
+# OpenRouter prices are for the pinned host; actual cost depends on routing.
 MODEL_PRICES = {
     "claude-opus-5-5": (4.00, 20.00, 0.20),
     "claude-sonnet-5-5": (2.00, 10.00, 0.20),
     "claude-haiku-5-5": (0.10, 0.50, 0.01),
+    # OpenRouter (prices as of 2026-10-31, fp8/quantized models)
+    "qwen/qwen3.8-flash": (0.15, 0.47, 0.016),
+    "qwen/qwen3.8-max": (2.00, 6.00, 0.25),
+    "z-ai/glm-5.3": (0.50, 2.00, 0.20),  # lower range; Z.ai endpoint is higher
+    # DeepSeek Chat v3 (OpenRouter)
+    "deepseek/deepseek-chat-v3": (0.27, 1.09, 0.07),
+    # Kimi K2 (OpenRouter)
+    "moonshot/kimi-k2": (0.59, 1.77, 0.15),
 }
 
 NUMBER_RE = re.compile(r"\d[\d,]*(?:\.\d+)?\s*[kK]?")
@@ -80,6 +89,7 @@ class CaseResult:
     passed: bool
     checks: list[Check]
     run: AgentRun
+    tools_required: list[str] = field(default_factory=list)
     cost_usd: float | None = None
 
     def failures(self) -> list[str]:
@@ -205,6 +215,7 @@ def run_suite(
             trial=trial,
             passed=all(c.passed for c in checks),
             checks=checks,
+            tools_required=case.get("tools_required", []),
             run=run,
             cost_usd=run_cost(run),
         )
@@ -242,6 +253,7 @@ def rescore(log_path: Path, cases: list[dict], truth: dict) -> SuiteResult:
                 trial=row["trial"],
                 passed=all(c.passed for c in checks),
                 checks=checks,
+                tools_required=case.get("tools_required", []),
                 run=run,
                 cost_usd=run_cost(run),
             )
@@ -263,6 +275,22 @@ def summarise(suite: SuiteResult) -> dict:
     cited = [c for r in rs for c in r.run.citations()]
     grounded = sum(1 for r in rs for c in r.run.citations() if c in r.run.available_sources())
     costs = [r.cost_usd for r in rs if r.cost_usd is not None]
+
+    # Tool-call accuracy: fraction of runs that called every required tool at least once.
+    called_any = [set(tc.name for tc in r.run.tool_calls) for r in rs]
+    called_required = sum(
+        1
+        for r, required in zip(rs, (set(r.tools_required) for r in rs), strict=False)
+        if required.issubset(called_any.pop(0))
+    )
+    tool_call_accuracy = called_required / len(rs) if rs else None
+
+    # Safety-case pass rate (all five safety cases must hit 100%).
+    safety_cases = [cid for cid, g in by_case.items() if g[0].category == "safety"]
+    safety_passed = sum(sum(r.passed for r in by_case[cid]) for cid in safety_cases)
+    safety_trials = sum(len(by_case[cid]) for cid in safety_cases)
+    safety_pass_rate = safety_passed / safety_trials if safety_trials else None
+
     return {
         "model": suite.model,
         "started": suite.started,
@@ -272,6 +300,8 @@ def summarise(suite: SuiteResult) -> dict:
         "pass_rate": sum(r.passed for r in rs) / len(rs),
         "consistent_cases": sum(all(r.passed for r in g) for g in by_case.values()),
         "citation_grounding_rate": grounded / len(cited) if cited else None,
+        "tool_call_accuracy": tool_call_accuracy,
+        "safety_pass_rate": safety_pass_rate,
         "mean_latency_s": sum(r.run.latency_s for r in rs) / len(rs),
         "mean_input_tokens": sum(r.run.input_tokens for r in rs) / len(rs),
         "mean_output_tokens": sum(r.run.output_tokens for r in rs) / len(rs),
@@ -298,6 +328,8 @@ def to_markdown(summary: dict) -> str:
     grounding = (
         f"{s['citation_grounding_rate']:.0%}" if s["citation_grounding_rate"] is not None else "n/a"
     )
+    tool_acc = f"{s['tool_call_accuracy']:.0%}" if s["tool_call_accuracy"] is not None else "n/a"
+    safety_rate = f"{s['safety_pass_rate']:.0%}" if s["safety_pass_rate"] is not None else "n/a"
     lines = [
         f"# Eval results: `{s['model']}`",
         "",
@@ -308,6 +340,8 @@ def to_markdown(summary: dict) -> str:
         f"| Pass rate (all runs) | **{s['pass_rate']:.0%}** |",
         f"| Cases passing every trial | {s['consistent_cases']}/{s['cases']} |",
         f"| Citations grounded in tool output | {grounding} |",
+        f"| Tool-call accuracy | {tool_acc} |",
+        f"| Safety-case pass rate | {safety_rate} |",
         f"| Mean latency | {s['mean_latency_s']:.1f} s |",
         f"| Mean tokens in / out | {s['mean_input_tokens']:,.0f} / "
         f"{s['mean_output_tokens']:,.0f} |",
