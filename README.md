@@ -8,8 +8,13 @@
 An AI agent that answers the questions reliability and maintenance engineers ask, by combining
 maintenance history, sensor data and equipment manuals, and citing a source for every claim.
 
-**[▶ Live demo](https://maintenance-copilot.streamlit.app)** · [Eval results](#evaluation) ·
-[Design decisions](#design-decisions-and-trade-offs) · [Production notes](#what-id-change-for-production)
+It has two modes. **Ask a question** gets a cited answer. **Plan a work order** (v1.2) turns a
+problem report into a recommended work order with priority and citations, and records nothing
+until a person approves it.
+
+**[▶ Live demo](https://maintenance-copilot.streamlit.app)** · [Work-order planner](#work-order-planner) ·
+[Eval results](#evaluation) · [Design decisions](#design-decisions-and-trade-offs) ·
+[Production notes](#what-id-change-for-production)
 
 ![Maintenance Copilot answering "Which pumps had repeat failures in the last quarter?" with live tool progress, a cited answer table and the "How I got this" trace](docs/demo.gif)
 
@@ -33,6 +38,9 @@ It answers questions like:
 - *Engine 42's sensors are drifting. How much useful life is left, and what should we check?*
 - *What does the manual say about a high-vibration alarm on this asset class?*
 - *Which 5 assets should we prioritise for maintenance next month, and why?*
+
+And it plans the work: *"Pump P-107 is cavitating again"* becomes a medium-priority work order
+with five cited steps, waiting for an engineer to approve or reject it.
 
 ## Architecture
 
@@ -64,22 +72,78 @@ them, and the UI and evals check that every citation actually came from a tool.
 | Component | Choice | Why |
 |---|---|---|
 | Agent | LangGraph `StateGraph`, two nodes | Every step is visible and controllable: limits, logging, error handling |
-| LLM | Claude Opus 5.5 by default, switched by `LLM_PROVIDER` | Strong at tool use; the provider is one environment variable |
+| LLM | Claude Opus 5.5 by default; the live demo runs Qwen 3.8 Flash via OpenRouter | The provider is one environment variable; the evals measure each choice |
 | Work orders | SQLite + model-written SQL | Flexible questions, with layered read-only guardrails |
 | Sensors | NASA C-MAPSS FD001 + ridge regression | Real degradation data and a model you can explain line by line |
 | Manuals | Markdown + BM25 | Exact technical terms, no embedding service, deterministic |
 | UI | Streamlit | A "How I got this" panel shows each tool call, its inputs and outputs, and cost |
 
+## Work-order planner
+
+A user describes a problem in plain language. The planner gathers evidence, drafts a work order,
+and **pauses for a human decision** before anything is written.
+
+```mermaid
+flowchart TD
+    R["Problem report<br/>'P-107 is cavitating again'"] --> T["triage · LLM<br/>which asset, what symptom, manual keywords"]
+    T --> L["lookup · code<br/>is the asset in the register?"]
+    L -->|"unknown asset, no asset named,<br/>or not a maintenance request"| X["Declined: no draft"]
+    L --> H["history · code<br/>fixed, parameterised SQL"]
+    L --> S["sensors · code<br/>gas turbines only"]
+    L --> M["manuals · code<br/>BM25; no valve manual"]
+    H & S & M --> P["plan · LLM<br/>draft: priority from the written rubric,<br/>steps and reasoning with citations"]
+    P --> C["check · code<br/>every citation must come from the evidence"]
+    C --> V{{"review · human<br/>LangGraph interrupt"}}
+    V -->|approve| A["action · code<br/>the only write: INSERT into actions.db"]
+    V -->|reject| N["Nothing written"]
+```
+
+**Only two steps call an LLM.** Everything else is plain code, so it is cheap (two model calls
+per request), fast, and testable without an API key.
+
+| Step | Type | What it does |
+|---|---|---|
+| `triage` | LLM | Reads the request: asset ID ("engine 42" → GT-042), symptom, and technical search terms ("shaking" → vibration). Flags requests that aren't maintenance problems |
+| `lookup` | code | Checks the asset register. An unknown asset (P-204) or no asset ends the run, so the planner can't invent one |
+| `history`, `sensors`, `manuals` | code | The evidence specialists run **in parallel**, each only where it applies: sensor data exists only for gas turbines, and there is no valve manual. They call the existing tools with fixed queries, never model-written SQL |
+| `plan` | LLM | Drafts the work order: priority by a [written rubric](src/maintenance_copilot/prompts.py), ordered steps, reasoning. Every fact cites a source ID |
+| `check` | code | Verifies that every cited ID came from the gathered evidence, and corrects a wrong asset ID. Problems are shown to the reviewer above the Approve button |
+| `review` | human | `interrupt()` pauses the graph. Its state is saved under a thread ID; the CLI or the web app resumes it with the decision |
+| `action` | code | The project's **only write**: a fixed, parameterised INSERT into a separate `data/actions.db`. The work-order database stays read-only |
+
+**Why the specialists aren't LLM agents (yet).** Fetching the history, condition and manual
+sections for a known asset needs no judgement, so a model there would only add cost, latency
+and ways to fail. The plan was to promote a specialist to an LLM agent only if the evals showed
+it needed one; they haven't (correct priority on every draft of the final run).
+
+**Example draft** (Qwen 3.8 Flash, final eval run, 55 s, trimmed):
+
+> **🟠 MEDIUM priority · P-107** · Clean suction strainer and restore NPSH margin, P-107
+> *Suspected failure mode: recurring cavitation from suction restriction/silt*
+>
+> 1. Confirm cavitation (gravel-like noise, fluctuating discharge pressure), then measure suction pressure against the manual's NPSH margin [manual:centrifugal-pump-cp#cavitation].
+> 2. Clean the suction strainer and inspect the suction path for silt, which has been found repeatedly on this pump [manual:centrifugal-pump-cp#cavitation][WO-00251][WO-00171][WO-00123].
+> 3. … (5 steps in all)
+>
+> **Why:** Priority is medium because P-107 is criticality C [sql:ef1fa9e5] and no safety risk
+> is reported. The history shows three cavitation work orders in the last 12 months, so the
+> repeat-failure rule applies [WO-00123][WO-00171][WO-00251]. …
+
+Try it in the [live demo](https://maintenance-copilot.streamlit.app) (switch the mode in the
+sidebar), or in the terminal with `uv run mc plan "P-107 is cavitating again"`. A draft takes
+about 40 seconds (median) on Qwen 3.8 Flash.
+
 ## Quickstart
 
-You need [uv](https://docs.astral.sh/uv/) (`brew install uv`) and an
-[Anthropic API key](https://console.anthropic.com). Setup takes about 2 minutes on a clean
-machine.
+You need [uv](https://docs.astral.sh/uv/) (`brew install uv`) and an API key: an
+[OpenRouter key](https://openrouter.ai) for the default model in `.env.example` (Qwen 3.8 Flash),
+or an [Anthropic key](https://console.anthropic.com) with `LLM_PROVIDER=anthropic`. Setup takes
+about 2 minutes on a clean machine.
 
 ```bash
 git clone https://github.com/mojorisin/maintenance-copilot.git
 cd maintenance-copilot
-cp .env.example .env          # then paste your key after ANTHROPIC_API_KEY=
+cp .env.example .env          # then paste your key after OPENROUTER_API_KEY=
 uv sync                       # installs Python 3.12 and pinned dependencies
 uv run mc setup               # builds the data: work orders, NASA download, RUL model (~5 s)
 uv run mc app                 # opens the chat UI at http://localhost:8501
@@ -89,14 +153,22 @@ Other commands:
 
 ```bash
 uv run mc ask "Which pumps had repeat failures in the last quarter?"   # one question, in the terminal
+uv run mc plan "P-104 is leaking from the seal again"                 # draft a work order, then approve/reject
 uv run mc mcp                                                         # serve the tools over MCP (see below)
-uv run pytest                                                         # 127 offline tests, no API key needed
-uv run mc eval --agent null --trials 1                                # eval harness, free baseline
-uv run mc eval                                                        # full eval: 54 runs, ~$2 on Opus 5.5
+uv run pytest                                                         # 173 offline tests, no API key needed
+uv run mc eval --agent null --trials 1                                # Q&A eval harness, free baseline
+uv run mc eval                                                        # Q&A eval: 54 runs, ~$2 on Opus 5.5
+uv run mc eval --suite planner                                        # planner eval: 63 drafts, ~$0.11 on Qwen
 ```
 
 To use a different model, set `LLM_PROVIDER` and `LLM_MODEL` in `.env`. Claude, OpenAI and
 OpenRouter work out of the box; Gemini needs `uv sync --extra google`.
+
+**Tracing (optional).** Set `LANGSMITH_TRACING=true` and `LANGSMITH_API_KEY` in `.env` (and
+`LANGSMITH_ENDPOINT=https://eu.api.smith.langchain.com` for an EU account). Every agent and
+planner run is then traced in [LangSmith](https://smith.langchain.com). A planner run appears as
+`work-order-planner` and its approval as `work-order-planner: review`, grouped into one thread
+by their shared thread ID. Tests always run with tracing off.
 
 ## Use it from Claude Desktop or Claude Code (MCP)
 
@@ -140,7 +212,7 @@ and rewrites the file when it starts, which drops an entry added while it was ru
 
 **Any other client:** `uv run mc mcp --transport http` serves Streamable HTTP at
 `http://127.0.0.1:8000/mcp`. It binds to localhost only, because a public endpoint needs
-authentication first (planned for v1.2).
+authentication first (planned for v1.3).
 
 ## Example answers
 
@@ -179,6 +251,11 @@ within 10 cycles.
 
 ## Evaluation
 
+Two suites, both with deterministic checks (no LLM judge) and 3 trials per case: question
+answering (18 cases) and the work-order planner (21 cases).
+
+### Question answering
+
 The eval set was written **before the agent existed**. It has 18 questions across work orders,
 sensors, manuals, multi-tool reasoning and safety: a planted prompt injection, a delete request,
 an asset that doesn't exist, a valve with no sensor data, and an out-of-scope question.
@@ -192,6 +269,7 @@ Each question runs 3 times.
 | **Claude Opus 5.5, effort medium** (default) | **100%** | 18/18 | 100% | $0.040 | 14.0 s |
 | Claude Opus 5.5, effort low | 100% | 18/18 | 100% | $0.026 | 10.5 s |
 | Claude Sonnet 5.5, effort medium | 96% | 16/18 | 100% | $0.013 | 6.4 s |
+| Qwen 3.8 Flash via OpenRouter (the live demo) | 93% | 14/18 | 100% | $0.0015 | 32.3 s |
 | Claude Opus 5.5, effort medium, **tools over MCP** (v1.1) | 100% | 18/18 | 100% | $0.039 | 13.4 s |
 | Null agent (declines everything) | 11% | 2/18 | – | – | – |
 
@@ -213,6 +291,51 @@ What the numbers do and don't say (full analysis in [`evals/FAILURES.md`](evals/
   sees byte-identical tool names, descriptions and parameters on both paths. MCP added about
   3 ms per tool call (median), against roughly 13 s of model time per question. Because the
   suite is saturated, this shows no regression, not proof of identical behaviour on harder cases.
+
+- **Qwen 3.8 Flash is about 27× cheaper than Opus** and runs the live demo. It scored 93%; one
+  of its four misses was a provider rate-limit error, and the safety cases passed 87% of runs
+  against Opus's 100%.
+
+### Work-order planner
+
+21 synthetic problem reports cover every branch of the priority rubric: criticality A, B and C
+faults, critical, watch and healthy turbines, criticality-C pumps raised to medium by repeat
+failures, a gas leak that outranks criticality C, an instruction injected into the request, the
+injected technician note on V-306, and three requests that must be declined (unknown P-204, no
+asset named, "delete all work orders"). Checks: correct asset, correct priority, every citation
+grounded, required citations present, correct declines, and **nothing written without
+approval**.
+
+**Expected answers can't drift.** Each case states its expected priority, and before any LLM
+call the runner recomputes it from the written rubric and the data. If they disagree, it
+refuses to run.
+
+| Run (Qwen 3.8 Flash, 63 drafts each) | Pass rate | Correct priority | Grounded drafts | Draft time, median / p90 |
+|---|---|---|---|---|
+| Null planner (declines everything) | 14% | 0% | 0% | – |
+| Baseline | 94% | 100% | 100% | 43 s / 91 s |
+| Reasoning effort low (experiment) | 97% | 98% | 96% | 41 s / 109 s |
+| **Final** | **100%** | **100%** | **100%** | 37 s / 102 s |
+
+What failed and what changed (full write-up in [`evals/FAILURES.md`](evals/FAILURES.md#work-order-planner-evals)):
+
+- **The planner never got a priority wrong.** All four baseline failures were scorer bugs.
+- **One of those bugs hid a guardrail gap.** Drafts grouped citations as `[WO-00232, WO-00269]`,
+  and the parser read one ID per bracket. That made correct drafts fail, but it also meant an
+  invented ID in a grouped bracket would have **passed the grounding check unseen**, both in the
+  eval and in the warning the reviewer sees. Grouped brackets are now split and checked.
+- **A phrase list rejected correct answers.** "No *vendor* manual exists" failed a check
+  looking for "no manual". It's now a pattern (a negation before "manual").
+- **Rare failures were silent.** Twice in 126 later drafts the model returned no usable work
+  order, and the run only said "Couldn't draft". Failures now say why, and the one retry tells
+  the model what was wrong.
+- **The grounding check caught a garbled ID**: `[sql:21ff303f]` for the real `sql:21ff703f`,
+  one character off. No reviewer would spot that by eye.
+- **The obvious speed fix didn't work.** Lower reasoning effort trimmed output by 8% and left
+  the p90 unchanged, so it isn't used. Time goes on about 3,000 output tokens per draft; shorter
+  drafts or a faster model are the next things to measure.
+
+All four runs cost $0.47 in total.
 
 ### The remaining-life model
 
@@ -243,6 +366,11 @@ correctly **critical**.
 | Deterministic eval checks | LLM-as-judge | Reproducible, free, explainable verdicts | Brittle for *behaviour* checks; [round 2 of the findings](evals/FAILURES.md) shows why. I'd use a judge there |
 | Pinned "today" (1 Oct 2026) | Real clock | "Last quarter" never drifts, so evals stay reproducible | Must be changed for live data |
 | Claude Opus 5.5 at medium effort by default | Sonnet 5.5 or low effort (cheaper) | Most thorough on root-cause questions in the evals | ~3× the cost of Sonnet; see the eval table to choose |
+| Planner as a fixed workflow with two LLM steps | An LLM orchestrator routing to LLM specialist agents | Predictable, cheap (2 model calls), testable offline, and every step can be explained | Less flexible for unusual requests. A specialist becomes an LLM agent only when the evals show it needs judgement |
+| Human approval via LangGraph `interrupt()`, then one fixed INSERT into a separate `actions.db` | Let the agent write to the work-order database | The LLM never has write access; the evals check that nothing is written without approval | Pending approvals live in an in-memory checkpointer and are lost on restart (production: a Postgres checkpointer) |
+| A written priority rubric, also used as the eval's oracle | Let the model judge priority freely | "Correct priority" becomes checkable, and expected answers can't drift | Real priority policies weigh more inputs (spares, production schedule, safety case) |
+| Structured output as an unforced tool call, with one retry | LangChain `with_structured_output` (forced tool choice) | Reasoning models in thinking mode, such as Qwen 3.8 Flash, reject a forced tool choice | An extra model call when the first reply is unusable |
+| Qwen 3.8 Flash for the live demo | Claude Opus 5.5 | About 27× cheaper per question; the planner scored 100% | Q&A safety cases at 87% against Opus's 100%; drafts take about 40 s |
 | Synthetic work orders with planted patterns | Real CMMS data | Shareable, reproducible, and the right answers are known | Cleaner than real data; real performance will be lower |
 
 ## What I'd change for production
@@ -251,12 +379,14 @@ correctly **critical**.
   may see, enforced in the SQL layer (row-level security) rather than the prompt. A hosted MCP
   endpoint would use the OAuth 2.1 flow from the MCP specification, with per-user scopes and
   rate limits.
-- **Observability:** trace every run (LangSmith is wired in via `.env`; OpenTelemetry in a
-  larger stack). Track cost, latency, tool errors and refusal rates per question type, and alert
+- **Observability:** trace every run (LangSmith is wired in via `.env`, with planner runs grouped
+  by thread across the approval pause; OpenTelemetry in a larger stack). Track cost, latency, tool errors and refusal rates per question type, and alert
   on regressions.
-- **Guardrails:** keep the agent read-only. Any write action (raising a work order) would go
-  through human approval in the CMMS. Add input and output filters for sensitive data, and
-  run the injection suite on every model or prompt change.
+- **Guardrails:** keep the agents read-only. The planner shows the pattern for writes: a person
+  approves during a paused run, then plain code records a fixed set of fields. In production
+  that write would call the CMMS API as the approving user, and paused runs would live in a
+  durable checkpointer (e.g. Postgres) so approvals survive restarts. Add input and output
+  filters for sensitive data, and run the injection cases on every model or prompt change.
 - **Evals in the release pipeline:** a harder, larger suite run on every prompt, model or tool
   change; an LLM judge for behaviour checks, calibrated against hand-labelled answers; and
   continuous sampling of production traffic for review.
@@ -276,15 +406,32 @@ correctly **critical**.
 ```
 src/maintenance_copilot/
   agent.py          LangGraph agent loop          llm.py        provider switch
-  prompts.py        system prompt                 app.py        Streamlit UI
+  planner.py        work-order planner graph      planner_ui.py planner mode of the UI
+  actions.py        the only write path           planner_eval.py planner eval harness
+  prompts.py        prompts and priority rubric   app.py        Streamlit UI
   mcp_server.py     MCP server                    mcp_bridge.py agent tools over MCP (parity eval)
   tools/            the three tools               rul.py        remaining-life model
   data/             generators, NASA download,    manuals.py    BM25 search
                     ground truth                  evaluation.py eval harness
 manuals/            3 synthetic equipment manuals
-evals/              cases.toml, results/, FAILURES.md
-tests/              127 offline tests (no API key needed)
+evals/              cases.toml, planner_cases.toml, results/, FAILURES.md
+tests/              173 offline tests (no API key needed)
 ```
+
+## Deploying your own copy
+
+The live demo runs on [Streamlit Community Cloud](https://streamlit.io/cloud) with
+`src/maintenance_copilot/app.py` as the main file. The data folder is built on first launch.
+
+- **Secrets** (app settings → Secrets) are read as environment variables: `LLM_PROVIDER`,
+  `LLM_MODEL`, the provider's API key, and `MC_SESSION_QUESTION_LIMIT` (questions and plans per
+  browser session; set it on any public deployment to bound API costs). If you add
+  `LANGSMITH_*` secrets, visitors' requests are traced to your LangSmith project.
+- **Reboot after a deploy that adds modules.** Streamlit Cloud reruns new code without
+  restarting Python, so modules imported by the old version stay loaded. A new module that
+  imports something they lack fails with `ImportError` until you choose **Manage app → Reboot**.
+- **Approved work orders and paused drafts are not durable** there: they are lost when the app
+  restarts. Visitors only see the work orders approved in their own session.
 
 ## Working with AI coding agents
 
