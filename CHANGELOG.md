@@ -6,6 +6,12 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+## [1.2.0] - 2026-11-10
+
+A work-order planner on top of v1.1: describe a problem, get a recommended work order with
+priority and citations, and decide whether it is recorded. Built with LangGraph, measured with
+a new eval suite, and traced in LangSmith.
+
 ### Added
 - **Work-order planner** (`mc plan "P-104 is leaking"`): a new LangGraph workflow next to the
   unchanged Q&A agent. An LLM triages the request, plain-code specialists gather evidence in
@@ -15,7 +21,7 @@ All notable changes to this project are documented here. The format follows
 - Approved work orders are written to a separate `data/actions.db`. It is the project's only
   write path: a fixed, parameterised INSERT run by code after approval. The work-order
   database stays read-only.
-- Written priority rubric shared by the planner prompt and (upcoming) planner evals.
+- A written priority rubric, shared by the planner prompt and the planner evals.
 - **"Plan a work order" mode in the Streamlit app**, next to the unchanged Q&A chat: live
   progress per step, the draft with its evidence and guardrail warnings, Approve / Reject
   buttons that resume the paused run, and this session's approved orders. Both modes share
@@ -41,8 +47,11 @@ All notable changes to this project are documented here. The format follows
   "invalid fields: priority", "malformed tool arguments"), answers malformed tool calls before
   retrying, and gives the model that reason on its one retry.
 - `langchain-openai` is a main dependency (#16): OpenRouter, the configured default, needs it,
-  and Streamlit Community Cloud installs only main dependencies.
+  and Streamlit Community Cloud installs only main dependencies. The `openai` extra is gone, so
+  `uv sync --extra openai` now fails; plain `uv sync` installs it.
 - Tests force LangSmith tracing off, so `pytest` never sends runs even when `.env` enables it.
+- Tests stay inside their temporary data folder. Before, where `data/` was missing (as on CI),
+  the app tests rebuilt all data and wrote ground truth into the repo's `data/` folder.
 
 ## [1.1.0] - 2026-10-27
 
@@ -98,6 +107,7 @@ First release.
 - **Engineering:** uv with pinned dependencies, 103 offline tests, CI with gitleaks secret
   scanning, ruff and pytest.
 
-[Unreleased]: https://github.com/mojorisin/maintenance-copilot/compare/v1.1.0...HEAD
+[Unreleased]: https://github.com/mojorisin/maintenance-copilot/compare/v1.2.0...HEAD
+[1.2.0]: https://github.com/mojorisin/maintenance-copilot/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/mojorisin/maintenance-copilot/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/mojorisin/maintenance-copilot/releases/tag/v1.0.0
