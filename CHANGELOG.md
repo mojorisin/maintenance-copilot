@@ -16,7 +16,16 @@ All notable changes to this project are documented here. The format follows
   write path: a fixed, parameterised INSERT run by code after approval. The work-order
   database stays read-only.
 - Written priority rubric shared by the planner prompt and (upcoming) planner evals.
-- LangSmith run names, tags and `thread_id` metadata for planner runs.
+- **"Plan a work order" mode in the Streamlit app**, next to the unchanged Q&A chat: live
+  progress per step, the draft with its evidence and guardrail warnings, Approve / Reject
+  buttons that resume the paused run, and this session's approved orders. Both modes share
+  the per-session question limit.
+- LangSmith: planner runs are grouped by `thread_id`, with readable inputs and outputs (the
+  request and a draft summary; the reviewer's decision) instead of raw graph state.
+- `LLM_TIMEOUT_S` (default 120): per-request model timeout for every provider.
+
+### Changed
+- Tests force LangSmith tracing off, so `pytest` never sends runs even when `.env` enables it.
 
 ## [1.1.0] - 2026-10-27
 

@@ -219,3 +219,10 @@ def test_parameterised_queries_are_still_read_only(data_env):
 )
 def test_normalise_asset_id(raw, expected):
     assert normalise_asset_id(raw) == expected
+
+
+def test_resume_without_a_paused_run_explains_instead_of_crashing(data_env):
+    run = Planner(ScriptedModel(responses=[triage("P-104")])).resume("no-such-thread", True)
+    assert run.status == "error"
+    assert "no longer waiting for approval" in run.message
+    assert actions.list_actioned() == []

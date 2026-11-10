@@ -19,6 +19,9 @@ load_dotenv(REPO_ROOT / ".env", override=False)
 LLM_PROVIDER = os.getenv("LLM_PROVIDER", "anthropic")
 LLM_MODEL = os.getenv("LLM_MODEL") or None
 LLM_EFFORT = os.getenv("LLM_EFFORT", "medium")  # Claude only: low | medium | high | xhigh
+# Seconds to wait for one model response before giving up (then retried by the
+# client). Reasoning models can take a minute on a long planner prompt.
+LLM_TIMEOUT_S = float(os.getenv("LLM_TIMEOUT_S", "120"))
 
 # Web app only: max questions per browser session (0 = unlimited). Set it on a
 # public deployment so visitors can't run up the API bill.

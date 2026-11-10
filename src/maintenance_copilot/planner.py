@@ -34,6 +34,7 @@ from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage
 from langgraph.checkpoint.memory import InMemorySaver
 from langgraph.graph import END, START, StateGraph
 from langgraph.types import Command, interrupt
+from langsmith import traceable
 from pydantic import BaseModel, Field, ValidationError
 
 from maintenance_copilot import actions, tools
@@ -340,7 +341,7 @@ class Planner:
     ) -> PlanRun:
         thread_id = thread_id or uuid.uuid4().hex[:12]
         state = {"request": request, "thread_id": thread_id, "evidence": [], "usage": []}
-        return self._run(state, thread_id, "work-order-planner", on_step)
+        return self._traced("work-order-planner", {"request": request}, state, thread_id, on_step)
 
     def resume(
         self,
@@ -349,18 +350,34 @@ class Planner:
         reviewer: str = "demo user",
         on_step: Callable[[str], None] | None = None,
     ) -> PlanRun:
+        cfg = {"configurable": {"thread_id": thread_id}}
+        if "review" not in self.graph.get_state(cfg).next:
+            # e.g. the app restarted, which empties the in-memory checkpointer
+            return PlanRun(
+                request="",
+                thread_id=thread_id,
+                status="error",
+                message="This draft is no longer waiting for approval. Start a new plan.",
+                model=self.model,
+            )
         decision = Command(resume={"approved": approved, "reviewer": reviewer})
-        return self._run(decision, thread_id, "work-order-planner: review", on_step)
+        inputs = {"decision": "approve" if approved else "reject", "reviewer": reviewer}
+        return self._traced("work-order-planner: review", inputs, decision, thread_id, on_step)
 
-    def _run(self, graph_input, thread_id: str, run_name: str, on_step) -> PlanRun:
-        cfg = {
-            "configurable": {"thread_id": thread_id},
-            # LangSmith: a readable name, filterable tags, and thread_id metadata,
-            # which LangSmith uses to group the start and resume runs into one thread.
-            "run_name": run_name,
+    def _traced(self, name: str, inputs: dict, graph_input, thread_id: str, on_step) -> PlanRun:
+        extra = {
+            "name": name,
             "tags": ["planner", f"model:{self.model}"],
+            # LangSmith groups runs that share thread_id metadata into one thread,
+            # so a draft and its later approval appear together.
             "metadata": {"thread_id": thread_id, "model": self.model},
         }
+        return _trace_root(
+            inputs, lambda: self._run(graph_input, thread_id, on_step), langsmith_extra=extra
+        )
+
+    def _run(self, graph_input, thread_id: str, on_step) -> PlanRun:
+        cfg = {"configurable": {"thread_id": thread_id}, "run_name": "planner-graph"}
         start = time.monotonic()
         error = None
         try:
@@ -396,3 +413,34 @@ class Planner:
             output_tokens=sum(u["out"] for u in usage),
             latency_s=time.monotonic() - start,
         )
+
+
+# --- LangSmith -------------------------------------------------------------------------
+
+
+def _trace_summary(run: PlanRun) -> dict:
+    """What the trace list shows as a planner run's output."""
+    draft = run.draft or {}
+    return {
+        "status": run.status,
+        "message": run.message,
+        "asset_id": draft.get("asset_id") or (run.asset or {}).get("asset_id"),
+        "priority": draft.get("priority"),
+        "title": draft.get("title"),
+        "issues": run.issues,
+        "action_id": run.action_id,
+    }
+
+
+@traceable(
+    run_type="chain",
+    process_inputs=lambda args: args["inputs"],
+    process_outputs=_trace_summary,
+)
+def _trace_root(inputs: dict, execute: Callable[[], PlanRun]) -> PlanRun:
+    """A LangSmith root run with readable inputs and outputs; the graph is traced inside it.
+
+    Without it, a paused run's output is its raw state and a resume's input is
+    LangGraph's internal Command object. When tracing is off this is a no-op.
+    """
+    return execute()

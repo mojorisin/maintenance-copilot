@@ -1,5 +1,12 @@
 """Shared fixtures: a synthetic engine fleet and a complete offline data folder."""
 
+import os
+
+# Tests never send traces, even when .env turns LangSmith tracing on. Set before
+# any import, because maintenance_copilot.config loads .env and langsmith caches it.
+os.environ["LANGSMITH_TRACING"] = "false"
+os.environ["LANGCHAIN_TRACING_V2"] = "false"
+
 import numpy as np
 import pandas as pd
 import pytest

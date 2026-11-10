@@ -66,6 +66,7 @@ class PlanRun:
     model: str = ""
     input_tokens: int = 0
     output_tokens: int = 0
+    cache_read_tokens: int = 0  # not tracked yet; keeps run_cost() working for both records
     latency_s: float = 0.0
 
     def citations(self) -> list[str]:
