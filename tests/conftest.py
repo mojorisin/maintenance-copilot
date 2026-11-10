@@ -47,6 +47,7 @@ def data_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "WORK_ORDERS_DB", tmp_path / "work_orders.db")
     monkeypatch.setattr(config, "CMAPSS_DIR", tmp_path / "cmapss")
     monkeypatch.setattr(config, "RUL_MODEL_FILE", tmp_path / "rul_model.json")
+    monkeypatch.setattr(config, "ACTIONS_DB", tmp_path / "actions.db")
     generate(config.WORK_ORDERS_DB)
 
     train = synthetic_fleet(n_units=40, seed=1)

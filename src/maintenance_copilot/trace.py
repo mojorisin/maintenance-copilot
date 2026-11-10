@@ -43,3 +43,41 @@ class AgentRun:
 
     def to_dict(self) -> dict:
         return asdict(self)
+
+
+@dataclass
+class PlanRun:
+    """The record of one work-order planner run (see planner.py).
+
+    status: awaiting_approval (paused for a human) | actioned | rejected |
+    declined (unknown asset or out of scope) | error.
+    """
+
+    request: str
+    thread_id: str
+    status: str
+    message: str = ""
+    triage: dict | None = None
+    asset: dict | None = None
+    evidence: list[ToolCall] = field(default_factory=list)
+    draft: dict | None = None
+    issues: list[str] = field(default_factory=list)
+    action_id: str | None = None
+    model: str = ""
+    input_tokens: int = 0
+    output_tokens: int = 0
+    latency_s: float = 0.0
+
+    def citations(self) -> list[str]:
+        """Source IDs cited in the draft's actions and reasoning, in order."""
+        if not self.draft:
+            return []
+        text = " ".join([*self.draft["actions"], self.draft["reasoning"]])
+        return list(dict.fromkeys(CITATION_RE.findall(text)))
+
+    def available_sources(self) -> set[str]:
+        """Every source ID the evidence specialists returned."""
+        return {s for call in self.evidence for s in call.result.get("sources", [])}
+
+    def to_dict(self) -> dict:
+        return asdict(self)

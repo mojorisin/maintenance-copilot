@@ -65,14 +65,18 @@ def _authorizer(action, arg1, arg2, db_name, trigger):
     return sqlite3.SQLITE_OK if action in _ALLOWED_ACTIONS else sqlite3.SQLITE_DENY
 
 
-def query_work_orders(sql: str) -> dict:
+def query_work_orders(sql: str, params: tuple = ()) -> dict:
     """Run one read-only SQL SELECT against the work-order database.
 
     Returns columns, rows and citation sources: the work-order IDs in the
     result when present, plus an ID for the query itself. Errors are
     returned (not raised) so the agent can correct its SQL and retry.
+
+    `params` fills `?` placeholders. Only code uses it (the planner's fixed
+    queries); the LLM-facing tool takes SQL alone.
     """
-    query_id = "sql:" + hashlib.sha256(sql.encode()).hexdigest()[:8]
+    key = sql + (repr(params) if params else "")  # unchanged IDs for parameterless SQL
+    query_id = "sql:" + hashlib.sha256(key.encode()).hexdigest()[:8]
     try:
         conn = sqlite3.connect(f"file:{config.WORK_ORDERS_DB}?mode=ro", uri=True)
     except sqlite3.Error as exc:
@@ -82,7 +86,7 @@ def query_work_orders(sql: str) -> dict:
     conn.set_progress_handler(lambda: int(time.monotonic() > deadline), 10_000)
     conn.set_authorizer(_authorizer)
     try:
-        cursor = conn.execute(sql)
+        cursor = conn.execute(sql, params)
         columns = [d[0] for d in cursor.description or []]
         rows = cursor.fetchmany(MAX_ROWS + 1)
     except sqlite3.Error as exc:

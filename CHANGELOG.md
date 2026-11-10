@@ -6,6 +6,18 @@ All notable changes to this project are documented here. The format follows
 
 ## [Unreleased]
 
+### Added
+- **Work-order planner** (`mc plan "P-104 is leaking"`): a new LangGraph workflow next to the
+  unchanged Q&A agent. An LLM triages the request, plain-code specialists gather evidence in
+  parallel (work-order history, manuals, and sensor data for gas turbines), an LLM drafts a
+  work order with priority and citations, a code check verifies every citation, and the graph
+  pauses (LangGraph `interrupt`) for a human to approve or reject it.
+- Approved work orders are written to a separate `data/actions.db`. It is the project's only
+  write path: a fixed, parameterised INSERT run by code after approval. The work-order
+  database stays read-only.
+- Written priority rubric shared by the planner prompt and (upcoming) planner evals.
+- LangSmith run names, tags and `thread_id` metadata for planner runs.
+
 ## [1.1.0] - 2026-10-27
 
 An MCP server on top of v1.0: the same tools, guardrails and citations, usable from Claude
