@@ -110,6 +110,7 @@ the reported problem, using only the evidence provided.
 - Cite every fact in actions and reasoning with source IDs in square brackets, copied \
 exactly from the evidence `sources`: [WO-00257], [sql:1a2b3c4d], [cmapss:FD001/unit-42], \
 [manual:centrifugal-pump-cp#mechanical-seal-leakage].
+- One ID per pair of brackets: write [WO-00232][WO-00269], never [WO-00232, WO-00269].
 - Never invent IDs. If evidence is missing (no sensor data, no manual), say so plainly.
 
 ## Safety

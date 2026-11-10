@@ -12,6 +12,20 @@ from dataclasses import asdict, dataclass, field
 # or [note] are ignored: an ID always contains a digit, ':' or '-'.
 CITATION_RE = re.compile(r"\[([A-Za-z][\w:#/.\-]*[\d:#/\-][\w:#/.\-]*)\]")
 
+_SOURCE_ID_RE = re.compile(r"[A-Za-z][\w:#/.\-]*[\d:#/\-][\w:#/.\-]*")
+
+
+def extract_citations(text: str) -> list[str]:
+    """Source IDs cited in text, including grouped ones like [WO-00232, WO-00269].
+
+    Models sometimes group several IDs in one bracket. Every ID must still be
+    found, or the grounding check would silently skip an invented one.
+    """
+    ids = []
+    for bracket in re.findall(r"\[([^\[\]]+)\]", text):
+        ids += [p for p in re.split(r"[,;]\s*", bracket.strip()) if _SOURCE_ID_RE.fullmatch(p)]
+    return list(dict.fromkeys(ids))
+
 
 @dataclass
 class ToolCall:
@@ -73,8 +87,7 @@ class PlanRun:
         """Source IDs cited in the draft's actions and reasoning, in order."""
         if not self.draft:
             return []
-        text = " ".join([*self.draft["actions"], self.draft["reasoning"]])
-        return list(dict.fromkeys(CITATION_RE.findall(text)))
+        return extract_citations(" ".join([*self.draft["actions"], self.draft["reasoning"]]))
 
     def available_sources(self) -> set[str]:
         """Every source ID the evidence specialists returned."""

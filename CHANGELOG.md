@@ -24,7 +24,24 @@ All notable changes to this project are documented here. The format follows
   request and a draft summary; the reviewer's decision) instead of raw graph state.
 - `LLM_TIMEOUT_S` (default 120): per-request model timeout for every provider.
 
+- **Planner eval suite** (`mc eval --suite planner`): 21 synthetic problem reports in
+  `evals/planner_cases.toml`, scored on correct asset, correct priority, grounded and required
+  citations, correct declines, safety cases, and "nothing written without approval". Reports a
+  priority confusion matrix, draft latency (median / p90) and cost. Before any LLM call, the
+  runner checks every expected priority against the rubric applied to the data and refuses
+  to run if they disagree. `--agent null` gives a free baseline; `--rescore` re-scores a
+  stored run at no cost.
+- `OPENROUTER_REASONING_EFFORT` (low | medium | high) for reasoning models on OpenRouter.
+
 ### Changed
+- Grouped citations such as `[WO-00232, WO-00269]` are now split into IDs, so every ID in a
+  planner draft is grounding-checked (before, a grouped bracket skipped the check entirely).
+  The planner prompt also asks for one ID per bracket.
+- When the model returns no usable work order, the planner now says why ("replied in prose",
+  "invalid fields: priority", "malformed tool arguments"), answers malformed tool calls before
+  retrying, and gives the model that reason on its one retry.
+- `langchain-openai` is a main dependency (#16): OpenRouter, the configured default, needs it,
+  and Streamlit Community Cloud installs only main dependencies.
 - Tests force LangSmith tracing off, so `pytest` never sends runs even when `.env` enables it.
 
 ## [1.1.0] - 2026-10-27

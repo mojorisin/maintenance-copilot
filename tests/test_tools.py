@@ -154,3 +154,10 @@ def test_manual_search_rejects_unknown_asset_type():
 def test_manual_search_with_no_match_says_so():
     r = search_manuals("capital of France")
     assert r["results"] == [] and r["sources"] == []
+
+
+def test_extract_citations_splits_grouped_brackets_and_skips_plain_words():
+    from maintenance_copilot.trace import extract_citations
+
+    text = "x [WO-00232, WO-00269; manual:a#b] [evidence gaps] [1] [sql:ab12] [WO-00232]"
+    assert extract_citations(text) == ["WO-00232", "WO-00269", "manual:a#b", "sql:ab12"]

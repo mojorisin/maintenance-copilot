@@ -83,3 +83,86 @@ For root-cause questions, the data favours Opus.
 5. **The data is synthetic and clean.** Real maintenance records (from a CMMS) are messier:
    free-text failure codes, missing dates, duplicate assets. Expect lower scores on real data
    until the tools normalise it.
+
+---
+
+# Work-order planner evals
+
+`mc eval --suite planner`: 21 synthetic problem reports × 3 trials = 63 drafts per run, all on
+Qwen 3.8 Flash via OpenRouter. Total spent on the runs below: **$0.47**.
+
+| Run | Pass rate | Correct priority | Grounded drafts | Draft time, median / p90 | Cost |
+|---|---|---|---|---|---|
+| Null planner (declines everything) | 14% | 0% | 0% | – | – |
+| Baseline | 94% | 100% | 100% | 43 s / 91 s | $0.11 |
+| Baseline, re-scored with fixed checks (no API calls) | 100% | 100% | 100% | 43 s / 91 s | – |
+| After fixes, default reasoning effort | 98% | 98% | 98% | 48 s / 108 s | $0.13 |
+| After fixes, reasoning effort **low** | 97% | 98% | 96% | 41 s / 109 s | $0.12 |
+| **Final** (finished code, default effort) | **100%** | **100%** | **100%** | 37 s / 102 s | $0.11 |
+
+Result files: [`results/planner-*`](results/). The expected priority of every case is written in
+[`planner_cases.toml`](planner_cases.toml) *and* recomputed from the written rubric and the data
+before each run; the runner refuses to start if the two disagree. So no expected answer can be
+quietly edited to make a run pass.
+
+## The short version
+
+The planner made the **right decision in every draft of the baseline**: correct asset and
+correct priority in all 54 drafts, correct declines, and no write without approval. The four
+baseline failures were two scorer bugs, and one of them hid a real **guardrail gap**: a model
+could group citations in one bracket and skip the grounding check. Later runs found two more
+real problems: drafts that occasionally failed without saying why, and a garbled citation ID,
+which the grounding check caught as designed. The obvious speed fix (lower reasoning effort) was
+measured and did not help.
+
+## Round 1: baseline failures (4 runs, all scorer bugs)
+
+| Case | Runs | What happened | Fix |
+|---|---|---|---|
+| c203-valve-knock, p113-c-repeat-coupling | 2 | The drafts did cite work orders, but grouped: `[WO-00232, WO-00269, manual:…]`. The parser only read one ID per bracket, so it saw no `WO-` citation. | **Parser:** split grouped brackets into IDs. **Prompt:** one ID per bracket. |
+| v301-c-valve-no-manual | 2 | All three drafts correctly said there is no valve manual. Two used wording the phrase list didn't have: "No *vendor* manual exists", "no sensor data *or valve* manual". | **Check:** a negation followed by "manual" in the same sentence (a regular expression), instead of a phrase list. Same lesson as Q&A round 2. |
+
+**The grouped-citation bug was more than a scoring error.** The same parser feeds the grounding
+check, in the eval *and* in the planner's `check` node, which warns the human reviewer. An
+invented ID inside a grouped bracket would have passed both silently. The fix makes the check
+stricter, and a test now plants `[WO-real, WO-99999]` and expects a warning. (The Q&A agent's
+answer parser has the same blind spot; that's a follow-up.)
+
+Before spending money again, the 63 stored baseline drafts were **re-scored offline** with the
+fixed checks: exactly these 4 runs flipped to pass, no passing run changed, and no ungrounded
+ID turned up inside a grouped bracket.
+
+## Round 2: failures in the new runs
+
+| Run | Case | What happened | Response |
+|---|---|---|---|
+| after-fixes | v306-injected-note (1 of 3) | No draft: two attempts gave no usable work order, and the run said only "Couldn't draft a work order". Safe (nothing written), but unexplained. | The planner now records *why* ("replied in prose: …", "invalid fields: priority", "malformed tool arguments"). It also answers malformed tool calls before retrying (OpenAI-style APIs require it; before, they were treated like a prose reply), and tells the model the reason on its one retry. |
+| reasoning-low | p107-c-with-repeats (1 of 3) | The same kind of missing draft (that run started before the fix). | As above. |
+| reasoning-low | p113-c-repeat-coupling (1 of 3) | The draft cited `[sql:21ff303f]`; the real ID is `sql:21ff703f`, **one character off**. | None needed: the grounding check flagged it, which in the app shows a warning above the Approve button. Models do garble IDs, and a reviewer would never spot this by eye. |
+
+The final run, with the finished code, passed all 63 drafts.
+
+## Speed: the knob that didn't help
+
+A draft takes about 40 s median and 100 s at p90, too slow for a live demo. Input is small
+(about 3.4k tokens); time goes on about 3k output tokens, mostly the model's hidden reasoning.
+The obvious fix, `OPENROUTER_REASONING_EFFORT=low`, cut output by 8% and the median by about
+7 s, did not move p90, and was within noise on quality. **It is not used.** Real options are
+shorter drafts (fewer steps, a tighter reasoning section) or a faster model, each to be measured
+the same way.
+
+## Known limitations of this eval
+
+1. **Three trials is a small sample.** The failures above each happened once in three runs.
+   100% on 63 drafts is evidence of reliability, not proof; a 1-in-50 failure would often slip
+   through.
+2. **The rubric is easy to apply.** Every case states its symptom plainly, and the priority
+   follows mechanically from criticality, turbine status and repeat history. The suite tests
+   whether the planner *applies* the rubric, not whether the rubric is right. Harder cases:
+   ambiguous symptoms, reports naming two assets, safety risks described indirectly.
+3. **It checks citations, not the plan's engineering quality.** Whether the steps are the right
+   repair is judged only by required mentions (e.g. "seal", "valve"). A maintenance engineer
+   reviewing a sample, or an LLM judge validated against such reviews, would be the next step.
+4. **Approval is not exercised.** The eval never approves; the approve path (the only write) is
+   covered by offline tests instead.
+5. **The data is synthetic and clean**, as for the Q&A suite.

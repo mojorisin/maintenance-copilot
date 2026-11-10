@@ -42,7 +42,7 @@ from maintenance_copilot.llm import get_chat_model, model_name
 from maintenance_copilot.prompts import PLANNER_PROMPT, TRIAGE_PROMPT
 from maintenance_copilot.tools import sensors
 from maintenance_copilot.tools.manual_search import ASSET_TYPES
-from maintenance_copilot.trace import CITATION_RE, PlanRun, ToolCall
+from maintenance_copilot.trace import PlanRun, ToolCall, extract_citations
 
 # --- structured outputs ----------------------------------------------------------------
 
@@ -116,45 +116,65 @@ class PlannerState(TypedDict, total=False):
     usage: Annotated[list[dict], operator.add]
 
 
-def _ask_structured(llm, schema: type[BaseModel], system: str, user: str) -> tuple[dict, dict]:
-    """Ask the model for one `schema` object. Returns (fields, or {} on failure; token usage).
+def _ask_structured(llm, schema: type[BaseModel], system: str, user: str) -> tuple[dict, dict, str]:
+    """Ask the model for one `schema` object.
+
+    Returns (fields, token usage, problem): fields is {} on failure, and
+    `problem` then says why, so a failed run explains itself in logs and evals.
 
     The schema is offered as a tool, with tool_choice left on "auto". Forcing
     the tool (what `with_structured_output` does) is rejected by reasoning
     models in thinking mode, e.g. Qwen 3.8 Flash on OpenRouter and Claude with
-    extended thinking. If the model answers in prose instead, nudge it once.
+    extended thinking. If the reply is unusable, the model gets one retry with
+    the reason.
     """
     model = llm.bind_tools([schema])
+    name = schema.__name__
     messages = [
-        SystemMessage(f"{system}\n\nRespond by calling the {schema.__name__} tool."),
+        SystemMessage(f"{system}\n\nRespond by calling the {name} tool."),
         HumanMessage(user),
     ]
     usage = {"in": 0, "out": 0}
+    problem = ""
     for _ in range(2):
         reply = model.invoke(messages)
         tokens = getattr(reply, "usage_metadata", None) or {}
         usage["in"] += tokens.get("input_tokens", 0)
         usage["out"] += tokens.get("output_tokens", 0)
+        # Every tool call needs a result before the next message (OpenAI-style
+        # APIs reject the request otherwise), including malformed ones, which
+        # LangChain files under invalid_tool_calls.
+        results = []
         for call in reply.tool_calls:
-            if call["name"] == schema.__name__:
+            if call["name"] != name:
+                problem = f"called unknown tool {call['name']!r}"
+            else:
                 try:
-                    return schema.model_validate(call["args"]).model_dump(), usage
-                except ValidationError:
-                    break  # malformed arguments: nudge once, like a prose reply
-        # Answer any tool calls first: OpenAI-style APIs require a result for each.
+                    return schema.model_validate(call["args"]).model_dump(), usage, ""
+                except ValidationError as exc:
+                    problem = "invalid fields: " + "; ".join(
+                        f"{'.'.join(map(str, e['loc']))}: {e['msg']}" for e in exc.errors()
+                    )
+            results.append(ToolMessage(f"Error: {problem}", tool_call_id=call["id"]))
+        for call in getattr(reply, "invalid_tool_calls", None) or []:
+            problem = f"malformed tool arguments: {call.get('error') or 'not valid JSON'}"
+            results.append(ToolMessage(f"Error: {problem}", tool_call_id=call["id"]))
+        if not results:
+            problem = f"replied in prose: {reply.text[:150]!r}"
         messages += [
             reply,
-            *(ToolMessage("Invalid arguments.", tool_call_id=c["id"]) for c in reply.tool_calls),
-            HumanMessage(f"Call the {schema.__name__} tool with valid fields."),
+            *results,
+            HumanMessage(f"{problem}. Call the {name} tool once, with valid fields."),
         ]
-    return {}, usage
+    return {}, usage, problem
 
 
 def build_graph(llm, checkpointer):
     def triage(state: PlannerState) -> dict:
-        parsed, usage = _ask_structured(llm, Triage, TRIAGE_PROMPT, state["request"])
+        parsed, usage, problem = _ask_structured(llm, Triage, TRIAGE_PROMPT, state["request"])
         if not parsed:
-            return {"status": "error", "message": "Couldn't read the request.", "usage": [usage]}
+            message = f"Couldn't read the request ({problem})."
+            return {"status": "error", "message": message, "usage": [usage]}
         return {"triage": parsed, "usage": [usage]}
 
     def lookup(state: PlannerState) -> dict:
@@ -242,9 +262,10 @@ def build_graph(llm, checkpointer):
             + ("\n".join(gaps) or "None.")
             + f"\n\n## Evidence\n{evidence}"
         )
-        parsed, usage = _ask_structured(llm, WorkOrderDraft, PLANNER_PROMPT, user)
+        parsed, usage, problem = _ask_structured(llm, WorkOrderDraft, PLANNER_PROMPT, user)
         if not parsed:
-            return {"status": "error", "message": "Couldn't draft a work order.", "usage": [usage]}
+            message = f"Couldn't draft a work order ({problem})."
+            return {"status": "error", "message": message, "usage": [usage]}
         return {"draft": parsed, "usage": [usage]}
 
     def check(state: PlannerState) -> dict:
@@ -255,7 +276,7 @@ def build_graph(llm, checkpointer):
             issues.append(f"Draft named {draft['asset_id']}; corrected to {aid}.")
             draft["asset_id"] = aid
         available = {s for e in state["evidence"] for s in e["result"].get("sources", [])}
-        cited = CITATION_RE.findall(" ".join([*draft["actions"], draft["reasoning"]]))
+        cited = extract_citations(" ".join([*draft["actions"], draft["reasoning"]]))
         if not cited:
             issues.append("The draft cites no sources.")
         if ungrounded := sorted(set(cited) - available):
