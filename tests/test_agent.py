@@ -144,3 +144,11 @@ def test_non_default_providers_require_a_model(monkeypatch):
     monkeypatch.setattr(config, "LLM_MODEL", None)
     with pytest.raises(ProviderError, match="Set LLM_MODEL"):
         get_chat_model(provider="openrouter")
+
+
+def test_openrouter_reasoning_effort_is_passed_through(monkeypatch):
+    pytest.importorskip("langchain_openai")
+    monkeypatch.setenv("OPENROUTER_API_KEY", "test")
+    monkeypatch.setenv("OPENROUTER_REASONING_EFFORT", "low")
+    llm = get_chat_model(provider="openrouter", model="qwen/qwen3.8-flash")
+    assert llm.extra_body["reasoning"] == {"effort": "low"}

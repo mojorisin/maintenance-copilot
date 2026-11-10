@@ -37,6 +37,8 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print("No ground truth found. Run `mc setup` first.")
         return 1
     truth = json.loads(config.GROUND_TRUTH_FILE.read_text())
+    if args.suite == "planner":
+        return eval_planner(args, truth)
     cases = evaluation.load_cases()
     if args.case:
         cases = [c for c in cases if c["id"] in args.case]
@@ -83,6 +85,43 @@ def cmd_eval(args: argparse.Namespace) -> int:
         config.REPO_ROOT / "evals" / "results",
         config.REPO_ROOT / "evals" / "runs",
         label=label or "",
+    )
+    print(md.read_text())
+    print(f"Summary: {md}\nFull run log: {log}")
+    return 0
+
+
+def eval_planner(args: argparse.Namespace, truth: dict) -> int:
+    """`mc eval --suite planner`: score drafted work orders against evals/planner_cases.toml."""
+    from maintenance_copilot import planner_eval
+    from maintenance_copilot.trace import PlanRun
+
+    cases = planner_eval.load_cases()
+    if args.case:
+        cases = [c for c in cases if c["id"] in args.case]
+    # Refuse to spend money on an eval set that disagrees with the rubric or the data.
+    if problems := planner_eval.validate_cases(cases, truth):
+        print("The eval set disagrees with the priority rubric:\n  " + "\n  ".join(problems))
+        return 1
+    if args.rescore:
+        print(f"Re-scoring stored drafts in {args.rescore} (no API calls)...")
+        suite = planner_eval.rescore(args.rescore, cases)
+    else:
+        if args.agent == "null":
+
+            def start(request: str) -> PlanRun:  # declines everything: the floor
+                return PlanRun(request, "", "declined", "null planner", model="null-planner")
+        else:
+            from maintenance_copilot.planner import Planner
+
+            start = Planner().start
+        print(f"Running {len(cases)} planner cases x {args.trials} trials, {args.agent}...")
+        suite = planner_eval.run_suite(start, cases, trials=args.trials, workers=args.workers)
+    md, log = planner_eval.save(
+        suite,
+        config.REPO_ROOT / "evals" / "results",
+        config.REPO_ROOT / "evals" / "runs",
+        label=args.label or "",
     )
     print(md.read_text())
     print(f"Summary: {md}\nFull run log: {log}")
@@ -238,6 +277,13 @@ def build_parser() -> argparse.ArgumentParser:
         choices=["copilot", "copilot-mcp", "null"],
         default="copilot",
         help="copilot-mcp: same agent, tools served over MCP (stdio subprocess)",
+    )
+    ev.add_argument(
+        "--suite",
+        choices=["qa", "planner"],
+        default="qa",
+        help="qa: question answering (evals/cases.toml); planner: work-order drafts "
+        "(evals/planner_cases.toml)",
     )
     ev.add_argument("--trials", type=int, default=3, help="runs per case (default: 3)")
     ev.add_argument("--workers", type=int, default=4, help="parallel runs (default: 4)")

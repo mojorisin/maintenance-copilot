@@ -55,6 +55,10 @@ def data_env(tmp_path, monkeypatch):
     monkeypatch.setattr(config, "CMAPSS_DIR", tmp_path / "cmapss")
     monkeypatch.setattr(config, "RUL_MODEL_FILE", tmp_path / "rul_model.json")
     monkeypatch.setattr(config, "ACTIONS_DB", tmp_path / "actions.db")
+    # Without this, data_ready() looks for the real ground-truth file; where it is missing
+    # (CI), the app would rebuild all data, download C-MAPSS and write into the repo's data/.
+    monkeypatch.setattr(config, "GROUND_TRUTH_FILE", tmp_path / "ground_truth.json")
+    config.GROUND_TRUTH_FILE.write_text("{}")
     generate(config.WORK_ORDERS_DB)
 
     train = synthetic_fleet(n_units=40, seed=1)

@@ -92,6 +92,10 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
                 extra["extra_body"]["provider"]["quantizations"] = quantizations.split(",")
             # Prevent automatic fallback to a cheaper model on server-side refusal.
             extra["extra_body"]["allow_fallbacks"] = False
+            # Reasoning models (e.g. Qwen 3.8 Flash): low | medium | high. Unset = the
+            # model's default. Lower effort is faster; see evals/FAILURES.md for the trade-off.
+            if effort := os.getenv("OPENROUTER_REASONING_EFFORT"):
+                extra["extra_body"]["reasoning"] = {"effort": effort}
         try:
             from langchain_openai import ChatOpenAI
         except ImportError:

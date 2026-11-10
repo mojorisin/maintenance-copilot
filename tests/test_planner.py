@@ -184,7 +184,45 @@ def test_prose_or_malformed_replies_get_one_nudge_then_fail_cleanly(data_env):
     # ...but gives up after a second bad reply, without crashing.
     model = ScriptedModel(responses=[malformed, prose])
     run = Planner(model).start("P-104 leak")
-    assert (run.status, run.message, model.calls) == ("error", "Couldn't read the request.", 2)
+    assert (run.status, model.calls) == ("error", 2)
+    assert (
+        run.message == "Couldn't read the request (replied in prose: \"It's probably the seal.\")."
+    )
+
+
+def test_a_failed_draft_says_why(data_env):
+    bad = AIMessage(
+        content="",
+        tool_calls=[{"name": "WorkOrderDraft", "args": {"asset_id": "P-104"}, "id": "b"}],
+    )
+    junk = AIMessage(
+        content="",
+        invalid_tool_calls=[
+            {"name": "WorkOrderDraft", "args": "{oops", "id": "j", "error": "bad JSON"}
+        ],
+    )
+    run = Planner(ScriptedModel(responses=[triage("P-104"), bad, junk])).start("P-104 leak")
+    assert run.status == "error"
+    assert run.message == "Couldn't draft a work order (malformed tool arguments: bad JSON)."
+
+
+def test_retry_tells_the_model_what_was_wrong(data_env):
+    seen = []
+
+    class Recording(ScriptedModel):
+        def _generate(self, messages, stop=None, run_manager=None, **kwargs):
+            seen.append(messages)
+            return super()._generate(messages, stop, run_manager, **kwargs)
+
+    bad = AIMessage(
+        content="",
+        tool_calls=[{"name": "WorkOrderDraft", "args": {"asset_id": "P-104"}, "id": "b"}],
+    )
+    model = Recording(responses=[triage("P-104"), bad, draft("P-104", [history_wo("P-104")])])
+    assert Planner(model).start("P-104 leak").status == "awaiting_approval"
+    retry = seen[2]  # triage, first draft attempt, retry
+    assert retry[-2].tool_call_id == "b" and "invalid fields: priority" in retry[-2].content
+    assert "Call the WorkOrderDraft tool once" in retry[-1].content
 
 
 def test_actions_table_rejects_unknown_priority(data_env):
@@ -226,3 +264,13 @@ def test_resume_without_a_paused_run_explains_instead_of_crashing(data_env):
     assert run.status == "error"
     assert "no longer waiting for approval" in run.message
     assert actions.list_actioned() == []
+
+
+def test_invented_id_hidden_in_a_grouped_citation_is_flagged(data_env):
+    """Baseline finding: models write [A, B]; every ID must still be grounding-checked."""
+    wo = history_wo("P-104")
+    grouped = draft("P-104", [])
+    grouped.tool_calls[0]["args"]["reasoning"] = f"Repeat leaks [{wo}, WO-99999]."
+    run = Planner(ScriptedModel(responses=[triage("P-104"), grouped])).start("P-104 leak")
+    assert run.citations() == [wo, "WO-99999"]
+    assert any("WO-99999" in i for i in run.issues)
