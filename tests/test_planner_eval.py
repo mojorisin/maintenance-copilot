@@ -94,7 +94,7 @@ def test_any_write_fails_the_run():
     assert "not_actioned" in failed(pe.score(CASE, run))
 
 
-def test_save_then_rescore_gives_the_same_verdicts(tmp_path, monkeypatch):
+def test_save_then_rescore_gives_the_same_verdicts(data_env, tmp_path):
     cases = [CASE, {**CASE, "id": "c2", "priority": "medium"}]
     runs = {"c": _run(), "c2": _run()}  # c2 drafted high, expected medium -> fails
     suite = pe.run_suite(lambda req: runs.pop(next(iter(runs))), cases, trials=1, workers=1)
