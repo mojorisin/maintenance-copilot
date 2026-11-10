@@ -108,3 +108,73 @@ def test_session_question_limit(app, monkeypatch):
     app.chat_input[0].set_value("Second").run()
     assert len(app.session_state.turns) == 1
     assert "allows 1 questions per session" in app.info[0].value
+
+
+# --- planner mode ------------------------------------------------------------------------
+
+
+@pytest.fixture
+def plan_app(app, monkeypatch):
+    """The app in "Plan a work order" mode, with a scripted planner model."""
+    from test_planner import ScriptedModel, draft, history_wo, triage
+
+    from maintenance_copilot import planner as planner_module
+
+    real_planner = planner_module.Planner
+
+    def scripted_planner():
+        responses = {
+            "P-104": [triage("P-104"), draft("P-104", [history_wo("P-104")])],
+            "P-204": [triage("P-204")],
+        }[app.session_state["asset"]]
+        return real_planner(ScriptedModel(responses=responses))
+
+    monkeypatch.setattr(planner_module, "Planner", scripted_planner)
+    app.session_state["asset"] = "P-104"
+    app.run()
+    app.sidebar.radio[0].set_value("Plan a work order").run()
+    return app
+
+
+def test_planner_mode_drafts_then_records_on_approval(plan_app):
+    plan_app.sidebar.button[0].click().run()  # the P-104 example
+    assert not plan_app.exception
+    text = _text(plan_app.chat_message[1])
+    assert "HIGH priority · P-104" in text
+    assert "Replace mechanical seal, P-104" in text
+    assert plan_app.expander[0].label == "Evidence · 3 tool calls"
+    assert len(plan_app.session_state.plans) == 1
+    # Nothing is recorded until a human clicks Approve, even after another rerun.
+    plan_app.run()
+    assert not plan_app.success
+    assert plan_app.session_state.plans[0].status == "awaiting_approval"
+
+    plan_app.text_input(key="reviewer-0").set_value("A. Reviewer")
+    plan_app.button(key="approve-0").click().run()
+    assert "AWO-0001" in plan_app.success[0].value
+    assert "A. Reviewer" in plan_app.success[0].value
+    assert plan_app.expander[-1].label == "Work orders approved in this session · 1"
+
+
+def test_planner_mode_reject_records_nothing(plan_app):
+    from maintenance_copilot.actions import list_actioned
+
+    plan_app.chat_input[0].set_value("P-104 is leaking").run()
+    plan_app.button(key="reject-0").click().run()
+    assert "nothing was written" in plan_app.info[0].value
+    assert list_actioned() == []
+
+
+def test_planner_mode_unknown_asset_is_declined(plan_app):
+    plan_app.session_state["asset"] = "P-204"
+    plan_app.chat_input[0].set_value("Pump P-204 is vibrating").run()
+    assert "no asset P-204" in plan_app.info[0].value
+    assert not any(b.key == "approve-0" for b in plan_app.button)  # nothing to approve
+
+
+def test_one_question_budget_covers_both_modes(plan_app, monkeypatch):
+    monkeypatch.setattr(config, "SESSION_QUESTION_LIMIT", 1)
+    plan_app.chat_input[0].set_value("P-104 is leaking").run()
+    plan_app.chat_input[0].set_value("P-104 again").run()
+    assert len(plan_app.session_state.plans) == 1
+    assert "limited number of requests" in plan_app.info[0].value

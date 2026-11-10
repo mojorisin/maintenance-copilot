@@ -69,6 +69,7 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
             api_key=_require_key("ANTHROPIC_API_KEY"),
             max_tokens=16_000,
             effort=config.LLM_EFFORT,
+            default_request_timeout=config.LLM_TIMEOUT_S,
             max_retries=3,
             betas=betas or None,
             model_kwargs=model_kwargs,
@@ -95,7 +96,7 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
             from langchain_openai import ChatOpenAI
         except ImportError:
             raise _install_hint("openai") from None
-        return ChatOpenAI(model=model, **extra)
+        return ChatOpenAI(model=model, timeout=config.LLM_TIMEOUT_S, max_retries=2, **extra)
 
     if provider == "google":
         model = _require_model(provider, model)
@@ -104,7 +105,7 @@ def get_chat_model(provider: str | None = None, model: str | None = None) -> Bas
             from langchain_google_genai import ChatGoogleGenerativeAI
         except ImportError:
             raise _install_hint("google") from None
-        return ChatGoogleGenerativeAI(model=model, google_api_key=key)
+        return ChatGoogleGenerativeAI(model=model, google_api_key=key, timeout=config.LLM_TIMEOUT_S)
 
     raise ProviderError(
         f"Unknown LLM_PROVIDER '{provider}'. Use anthropic, openai, google or openrouter."

@@ -26,7 +26,7 @@ try:
 except Exception:  # no secrets configured (normal for local runs with .env)
     pass
 
-from maintenance_copilot import config  # noqa: E402
+from maintenance_copilot import config, planner_ui  # noqa: E402
 from maintenance_copilot.evaluation import run_cost  # noqa: E402
 from maintenance_copilot.llm import ProviderError  # noqa: E402
 from maintenance_copilot.trace import AgentRun, ToolCall  # noqa: E402
@@ -53,6 +53,14 @@ def get_agent():
     from maintenance_copilot.agent import build_agent
 
     return build_agent()
+
+
+@st.cache_resource(show_spinner=False)
+def get_planner():
+    """One planner per server process: its checkpointer holds drafts awaiting approval."""
+    from maintenance_copilot.planner import Planner
+
+    return Planner()
 
 
 @st.cache_resource(show_spinner=False)
@@ -173,22 +181,31 @@ st.caption(
 
 if "turns" not in st.session_state:
     st.session_state.turns = []  # list[AgentRun]
+st.session_state.setdefault("plans", [])  # list[PlanRun], planner mode
 
+ASK, PLAN = "Ask a question", "Plan a work order"
 with st.sidebar:
-    st.subheader("Try asking")
-    for q in EXAMPLES:
+    mode = st.radio("Mode", [ASK, PLAN], horizontal=True, key="mode")
+    st.subheader("Try asking" if mode == ASK else "Try a problem report")
+    for q in EXAMPLES if mode == ASK else planner_ui.EXAMPLES:
         if st.button(q, width="stretch"):
-            st.session_state.pending = q
+            st.session_state["pending" if mode == ASK else "pending_plan"] = q
     st.divider()
     effort = f", effort {config.LLM_EFFORT}" if config.LLM_PROVIDER == "anthropic" else ""
     st.caption(f"Model: {config.LLM_PROVIDER} · {config.LLM_MODEL or 'claude-opus-5-5'}{effort}")
-    st.caption("Read-only access. Every claim cites its source; open “How I got this” to check.")
+    if mode == ASK:
+        st.caption("Read-only access. Every claim cites its source; open “How I got this”.")
+    else:
+        st.caption("Plans are drafted from cited evidence. Nothing is recorded until you approve.")
+    # One budget for both modes: each question or plan costs LLM calls.
     limit = config.SESSION_QUESTION_LIMIT
+    used = len(st.session_state.turns) + len(st.session_state.plans)
     if limit:
-        left = max(limit - len(st.session_state.turns), 0)
+        left = max(limit - used, 0)
         st.caption(f"Public demo: {left} of {limit} questions left in this session.")
     if st.button("Clear conversation", width="stretch"):
         st.session_state.turns = []
+        st.session_state.plans = []
         st.rerun()
 
 try:
@@ -196,6 +213,15 @@ try:
         ensure_data()
 except Exception as exc:
     st.error(f"Couldn't prepare the data ({exc}). Locally, run `uv run mc setup`.")
+    st.stop()
+
+if mode == PLAN:
+    planner_ui.render_page(
+        get_planner,
+        render_call,
+        pending=st.session_state.pop("pending_plan", None),
+        limit_reached=bool(limit) and used >= limit,
+    )
     st.stop()
 
 for run in st.session_state.turns:
@@ -208,7 +234,7 @@ for run in st.session_state.turns:
 question = st.chat_input("Ask about assets, failures, sensors or manuals…")
 question = question or st.session_state.pop("pending", None)
 
-if question and limit and len(st.session_state.turns) >= limit:
+if question and limit and used >= limit:
     st.info(
         f"This public demo allows {limit} questions per session to keep API costs bounded. "
         "Clone the repo to run it with your own key: see the README quickstart."
