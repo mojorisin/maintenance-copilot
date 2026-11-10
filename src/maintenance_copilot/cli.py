@@ -3,6 +3,7 @@
 mc setup   build local data: work orders, C-MAPSS download, RUL model, ground truth
 mc eval    run the evaluation suite (`--agent null` for the do-nothing baseline)
 mc ask     ask the agent a question from the terminal
+mc plan    draft a work order for a reported problem, then approve or reject it
 mc app     launch the Streamlit chat UI
 mc mcp     serve the tools, resources and prompts over MCP
 """
@@ -115,6 +116,48 @@ def cmd_ask(args: argparse.Namespace) -> int:
     return 0
 
 
+def print_plan(run) -> None:
+    """Show a planner run: what it looked at, the draft, and any guardrail issues."""
+    if run.triage:
+        print(f"Triage: asset {run.triage['asset_id']!r}, symptom: {run.triage['symptom']}")
+    for call in run.evidence:
+        sources = call.result.get("sources", [])
+        detail = call.result.get("error") or f"{len(sources)} sources: {', '.join(sources[:5])}"
+        print(f"  evidence · {call.name}: {detail}")
+    if run.draft:
+        d = run.draft
+        print(f"\nDraft work order · {d['asset_id']} · priority {d['priority'].upper()}")
+        print(f"  {d['title']}\n  Suspected failure mode: {d['failure_mode']}")
+        for i, step in enumerate(d["actions"], 1):
+            print(f"  {i}. {step}")
+        print(f"  Why: {d['reasoning']}")
+    for issue in run.issues:
+        print(f"  ⚠ {issue}")
+    print(f"\n[{run.status}] {run.message}")
+    print(
+        f"{run.model} · {run.latency_s:.1f}s · {run.input_tokens:,} in / "
+        f"{run.output_tokens:,} out tokens · thread {run.thread_id}"
+    )
+
+
+def cmd_plan(args: argparse.Namespace) -> int:
+    """Draft a work order, pause for a human decision, then record it or not."""
+    from maintenance_copilot.planner import Planner
+
+    planner = Planner()
+    run = planner.start(args.request, on_step=lambda node: print(f"… {node}"))
+    print_plan(run)
+    if run.status != "awaiting_approval":
+        return 0 if run.status == "declined" else 1
+    if args.decision:
+        approved = args.decision == "approve"
+    else:
+        approved = input("\nApprove this work order? [y/N] ").strip().lower() in ("y", "yes")
+    run = planner.resume(run.thread_id, approved=approved, reviewer=args.reviewer)
+    print(f"\n[{run.status}] {run.message}")
+    return 0 if run.status in ("actioned", "rejected") else 1
+
+
 def cmd_mcp(args: argparse.Namespace) -> int:
     """Serve the tools, resources and prompts over MCP.
 
@@ -169,6 +212,25 @@ def build_parser() -> argparse.ArgumentParser:
     ask = sub.add_parser("ask", help="ask the agent a question")
     ask.add_argument("question")
     ask.set_defaults(func=cmd_ask)
+
+    plan = sub.add_parser("plan", help="draft a work order and approve or reject it")
+    plan.add_argument("request", help='e.g. "P-104 is leaking again, what should we do?"')
+    plan.add_argument(
+        "--approve",
+        dest="decision",
+        action="store_const",
+        const="approve",
+        help="approve without asking (scripts)",
+    )
+    plan.add_argument(
+        "--reject",
+        dest="decision",
+        action="store_const",
+        const="reject",
+        help="reject without asking (scripts)",
+    )
+    plan.add_argument("--reviewer", default="cli user", help="name recorded on approval")
+    plan.set_defaults(func=cmd_plan)
 
     ev = sub.add_parser("eval", help="run the evaluation suite")
     ev.add_argument(

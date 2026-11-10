@@ -11,7 +11,9 @@ learning project built on public data (NASA C-MAPSS) and synthetic data (work or
 1. Never read, print or commit secrets (`.env`, `.streamlit/secrets.toml`). Use `.env.example`
    to see which variables exist.
 2. Only synthetic or public data. Never use real company or employer data.
-3. Keep the agent and the SQL tool read-only.
+3. Keep every LLM-facing path read-only: the Q&A agent, the SQL tool and the planner's LLM
+   nodes. The only write in the project is `actions.action_work_order`: a fixed, parameterised
+   INSERT into the separate `data/actions.db`, run by plain code after a human approves.
 4. Never change eval answers or checks just to make a run pass.
 5. Run `uv run pytest` before committing. All tests must pass.
 6. Make the smallest change that solves the task.
@@ -25,6 +27,7 @@ uv sync                                    # install pinned deps (add --extra op
 uv run mc setup                            # build local data, RUL model, ground truth (~5 s, no API cost)
 uv run mc app                              # Streamlit chat UI at http://localhost:8501 (API cost per question)
 uv run mc ask "question"                   # one question in the terminal (API cost)
+uv run mc plan "P-104 is leaking"          # draft a work order, then approve/reject (API cost)
 uv run mc mcp                              # serve the tools over MCP (no API cost)
 uv run pytest                              # offline tests, no API key needed, free
 uv run ruff check . && uv run ruff format --check .
@@ -42,6 +45,8 @@ cost down.
 ```
 src/maintenance_copilot/
   agent.py        LangGraph agent loop (max 8 tool rounds)
+  planner.py      work-order planner graph: triage, evidence, plan, check, human review
+  actions.py      the only write path: approved work orders -> data/actions.db
   prompts.py      system prompt
   llm.py          provider switch via LLM_PROVIDER / LLM_MODEL env vars
   tools/          the three tools: work_orders (read-only SQL), sensors, manual_search

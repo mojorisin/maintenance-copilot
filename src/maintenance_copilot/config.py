@@ -30,6 +30,9 @@ WORK_ORDERS_DB = DATA_DIR / "work_orders.db"
 GROUND_TRUTH_FILE = DATA_DIR / "ground_truth.json"
 CMAPSS_DIR = DATA_DIR / "cmapss"
 RUL_MODEL_FILE = DATA_DIR / "rul_model.json"
+# Work orders approved by a human in the planner. A separate file on purpose:
+# the work-order database above stays read-only for every LLM-facing path.
+ACTIONS_DB = DATA_DIR / "actions.db"
 
 # The synthetic data ends on 2026-09-30, and the agent treats AS_OF_DATE as
 # "today". Pinning it keeps questions like "last quarter" (= Q3 2026) stable,
