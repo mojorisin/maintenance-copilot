@@ -3,9 +3,9 @@
 Switch providers with environment variables, no code changes:
 
     LLM_PROVIDER=anthropic   (default; LLM_MODEL defaults to claude-opus-5-5)
-    LLM_PROVIDER=openai      LLM_MODEL=<model id>   needs: uv sync --extra openai
+    LLM_PROVIDER=openai      LLM_MODEL=<model id>
     LLM_PROVIDER=google      LLM_MODEL=<model id>   needs: uv sync --extra google
-    LLM_PROVIDER=openrouter  LLM_MODEL=<vendor/model>  needs: uv sync --extra openai
+    LLM_PROVIDER=openrouter  LLM_MODEL=<vendor/model>
 
 Only Claude has a default model: it is the provider this project is
 evaluated on. Defaults for other providers would go stale silently, so they

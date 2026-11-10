@@ -23,7 +23,7 @@ learning project built on public data (NASA C-MAPSS) and synthetic data (work or
 Use `uv run` for everything. Python 3.12, line length 100, lint with ruff.
 
 ```bash
-uv sync                                    # install pinned deps (add --extra openai / --extra google)
+uv sync                                    # install pinned deps (add --extra google for Gemini)
 uv run mc setup                            # build local data, RUL model, ground truth (~5 s, no API cost)
 uv run mc app                              # Streamlit chat UI at http://localhost:8501 (API cost per question)
 uv run mc ask "question"                   # one question in the terminal (API cost)
