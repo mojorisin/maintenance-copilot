@@ -95,8 +95,8 @@ uv run mc eval --agent null --trials 1                                # eval har
 uv run mc eval                                                        # full eval: 54 runs, ~$2 on Opus 5.5
 ```
 
-To use a different model, set `LLM_PROVIDER` and `LLM_MODEL` in `.env`. OpenAI and Gemini need
-`uv sync --extra openai` or `--extra google`.
+To use a different model, set `LLM_PROVIDER` and `LLM_MODEL` in `.env`. Claude, OpenAI and
+OpenRouter work out of the box; Gemini needs `uv sync --extra google`.
 
 ## Use it from Claude Desktop or Claude Code (MCP)
 
